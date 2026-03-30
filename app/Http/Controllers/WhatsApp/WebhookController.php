@@ -31,20 +31,12 @@ class WebhookController extends Controller
             'ip_address' => $request->ip(),
         ]);
 
-        $webhookSecret = config('whatsapp.webhook_secret');
-
-        if (!$webhookSecret) {
-            Log::warning('WhatsApp webhook secret not configured — rejecting request');
-
-            $webhookLog->update([
-                'status_code' => 403,
-                'response_body' => ['error' => 'Webhook secret not configured'],
+        if ($request->header('User-Agent') !== '2Chat') {
+            Log::warning('WhatsApp webhook rejected — unexpected User-Agent', [
+                'user_agent' => $request->header('User-Agent'),
+                'ip' => $request->ip(),
             ]);
 
-            return response()->json(['error' => 'Webhook secret not configured'], 403);
-        }
-
-        if ($request->header('X-Webhook-Secret') !== $webhookSecret) {
             $webhookLog->update([
                 'status_code' => 403,
                 'response_body' => ['error' => 'Unauthorized'],
