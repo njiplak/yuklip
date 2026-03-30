@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-APP_DIR="/var/www/html/app"
+APP_DIR="/var/www/html/yuklip"
 QUEUE_SERVICE="kawakib-queue-worker"
 
 # Function to display an error message and exit
