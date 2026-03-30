@@ -8,7 +8,7 @@ use Illuminate\Console\Command;
 
 class SetupWebhooksCommand extends Command
 {
-    protected $signature = 'concierge:setup-webhooks';
+    protected $signature = 'concierge:setup-webhooks {--fresh : Unsubscribe all existing webhooks before registering}';
 
     protected $description = 'Register webhook subscriptions with Lodgify and 2Chat';
 
@@ -34,19 +34,24 @@ class SetupWebhooksCommand extends Command
             return self::FAILURE;
         }
 
+        if ($this->option('fresh')) {
+            $this->unsubscribeAll($lodgify);
+        }
+
         $baseUrl = config('app.url');
         $failed = false;
 
         // --- Lodgify webhooks ---
         $this->info('Registering Lodgify webhooks...');
+        $secret = null;
+
         foreach ($this->lodgifyEvents as $event) {
             $targetUrl = $baseUrl . '/lodgify/webhook';
             try {
                 $result = $lodgify->subscribeWebhook($event, $targetUrl);
 
-                if (isset($result['secret']) && $event === 'booking_new') {
-                    $this->warn("  IMPORTANT: Lodgify returned a webhook secret. Save it as LODGIFY_WEBHOOK_SECRET in your .env:");
-                    $this->line("  LODGIFY_WEBHOOK_SECRET={$result['secret']}");
+                if (isset($result['secret']) && !$secret) {
+                    $secret = $result['secret'];
                 }
 
                 $this->line("  {$event} => {$targetUrl} [OK]");
@@ -54,6 +59,15 @@ class SetupWebhooksCommand extends Command
                 $this->error("  {$event} => FAILED: {$e->getMessage()}");
                 $failed = true;
             }
+        }
+
+        if ($secret) {
+            $this->newLine();
+            $this->warn('  IMPORTANT: Lodgify returned a webhook secret.');
+            $this->warn('  Save it as LODGIFY_WEBHOOK_SECRET in your .env:');
+            $this->newLine();
+            $this->line("  LODGIFY_WEBHOOK_SECRET={$secret}");
+            $this->newLine();
         }
 
         // --- 2Chat webhook ---
@@ -76,6 +90,41 @@ class SetupWebhooksCommand extends Command
         return self::SUCCESS;
     }
 
+    protected function unsubscribeAll(LodgifyService $lodgify): void
+    {
+        $this->info('Unsubscribing all existing Lodgify webhooks...');
+
+        try {
+            $webhooks = $lodgify->listWebhooks();
+        } catch (\Throwable $e) {
+            $this->error("  Failed to list webhooks: {$e->getMessage()}");
+            return;
+        }
+
+        if (empty($webhooks)) {
+            $this->line('  No existing webhooks found.');
+            return;
+        }
+
+        foreach ($webhooks as $webhook) {
+            $id = $webhook['id'] ?? null;
+            $event = $webhook['event'] ?? 'unknown';
+
+            if (!$id) {
+                continue;
+            }
+
+            try {
+                $lodgify->unsubscribeWebhook($id);
+                $this->line("  Unsubscribed: {$event} ({$id}) [OK]");
+            } catch (\Throwable $e) {
+                $this->error("  Unsubscribe {$event} ({$id}) => FAILED: {$e->getMessage()}");
+            }
+        }
+
+        $this->newLine();
+    }
+
     protected function preflight(): bool
     {
         $ok = true;
@@ -83,7 +132,6 @@ class SetupWebhooksCommand extends Command
         $required = [
             'ANTHROPIC_API_KEY' => config('ai.providers.anthropic.key'),
             'LODGIFY_API_KEY' => config('lodgify.api_key'),
-            'LODGIFY_WEBHOOK_SECRET' => config('lodgify.webhook_secret'),
             'TWOCHAT_API_KEY' => config('whatsapp.twochat_api_key'),
             'TWOCHAT_PHONE_NUMBER' => config('whatsapp.twochat_phone_number'),
             'WHATSAPP_WEBHOOK_SECRET' => config('whatsapp.webhook_secret'),
@@ -99,6 +147,14 @@ class SetupWebhooksCommand extends Command
             } else {
                 $this->line("  {$name} [set]");
             }
+        }
+
+        // LODGIFY_WEBHOOK_SECRET is optional for preflight — it will be returned during registration
+        $webhookSecret = config('lodgify.webhook_secret');
+        if ($webhookSecret) {
+            $this->line("  LODGIFY_WEBHOOK_SECRET [set]");
+        } else {
+            $this->warn("  LODGIFY_WEBHOOK_SECRET [not set — will be returned by Lodgify during registration]");
         }
 
         if (config('app.url') === 'http://localhost') {

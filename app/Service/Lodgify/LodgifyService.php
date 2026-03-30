@@ -51,9 +51,13 @@ class LodgifyService
      */
     public function unsubscribeWebhook(string $webhookId): array
     {
-        $response = $this->client()->delete("/webhooks/v1/{$webhookId}");
+        $response = $this->client()->delete('/webhooks/v1/unsubscribe', [
+            'id' => $webhookId,
+        ]);
 
-        return $response->json();
+        $data = $response->json();
+
+        return is_array($data) ? $data : ['raw' => $data];
     }
 
     /**
