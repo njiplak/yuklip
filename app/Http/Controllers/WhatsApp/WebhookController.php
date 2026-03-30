@@ -9,6 +9,7 @@ use App\Models\Booking;
 use App\Models\SystemLog;
 use App\Models\Transaction;
 use App\Models\UpsellLog;
+use App\Models\WebhookLog;
 use App\Models\WhatsappMessage;
 use App\Service\WhatsApp\TwoChatService;
 use App\Utils\WebResponse;
@@ -21,14 +22,34 @@ class WebhookController extends Controller
 {
     public function handle(Request $request, TwoChatService $twoChat): JsonResponse
     {
+        $webhookLog = WebhookLog::create([
+            'source' => 'whatsapp',
+            'method' => $request->method(),
+            'url' => $request->fullUrl(),
+            'headers' => collect($request->headers->all())->except(['cookie'])->toArray(),
+            'payload' => $request->all(),
+            'ip_address' => $request->ip(),
+        ]);
+
         $webhookSecret = config('whatsapp.webhook_secret');
 
         if (!$webhookSecret) {
             Log::warning('WhatsApp webhook secret not configured — rejecting request');
+
+            $webhookLog->update([
+                'status_code' => 403,
+                'response_body' => ['error' => 'Webhook secret not configured'],
+            ]);
+
             return response()->json(['error' => 'Webhook secret not configured'], 403);
         }
 
         if ($request->header('X-Webhook-Secret') !== $webhookSecret) {
+            $webhookLog->update([
+                'status_code' => 403,
+                'response_body' => ['error' => 'Unauthorized'],
+            ]);
+
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 

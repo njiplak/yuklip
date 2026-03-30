@@ -10,6 +10,7 @@ use App\Contract\Concierge\OfferContract;
 use App\Contract\Concierge\SystemLogContract;
 use App\Contract\Concierge\TransactionContract;
 use App\Contract\Concierge\UpsellLogContract;
+use App\Contract\Concierge\WebhookLogContract;
 use App\Contract\Concierge\WhatsappMessageContract;
 use App\Contract\Setting\PermissionContract;
 use App\Contract\Setting\RoleContract;
@@ -22,6 +23,7 @@ use App\Service\Concierge\OfferService;
 use App\Service\Concierge\SystemLogService;
 use App\Service\Concierge\TransactionService;
 use App\Service\Concierge\UpsellLogService;
+use App\Service\Concierge\WebhookLogService;
 use App\Service\Concierge\WhatsappMessageService;
 use App\Service\Setting\PermissionService;
 use App\Service\Setting\RoleService;
@@ -48,6 +50,7 @@ class ContractProvider extends ServiceProvider
         TransactionContract::class => TransactionService::class,
         WhatsappMessageContract::class => WhatsappMessageService::class,
         SystemLogContract::class => SystemLogService::class,
+        WebhookLogContract::class => WebhookLogService::class,
     ];
 
     public function register(): void

@@ -4,6 +4,7 @@ import {
     ChevronsUpDown,
     CreditCard,
     Gift,
+    Globe,
     LayoutDashboard,
     LogOut,
     Megaphone,
@@ -207,6 +208,14 @@ export default function AppLayout({ children }: AppLayoutProps) {
                                         <Link href={backoffice.concierge.systemLog.index.url()}>
                                             <ScrollText />
                                             <span>System Logs</span>
+                                        </Link>
+                                    </SidebarMenuButton>
+                                </SidebarMenuItem>
+                                <SidebarMenuItem>
+                                    <SidebarMenuButton asChild isActive={isMenuActive(backoffice.concierge.webhookLog.index.url())}>
+                                        <Link href={backoffice.concierge.webhookLog.index.url()}>
+                                            <Globe />
+                                            <span>Webhook Logs</span>
                                         </Link>
                                     </SidebarMenuButton>
                                 </SidebarMenuItem>

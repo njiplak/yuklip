@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Jobs\CancellationRecoveryJob;
 use App\Models\Booking;
 use App\Models\SystemLog;
+use App\Models\WebhookLog;
 use App\Models\WhatsappMessage;
 use App\Service\WhatsApp\TwoChatService;
 use Carbon\Carbon;
@@ -18,8 +19,23 @@ class WebhookController extends Controller
 {
     public function handle(Request $request, TwoChatService $twoChat): JsonResponse
     {
+        $webhookLog = WebhookLog::create([
+            'source' => 'lodgify',
+            'method' => $request->method(),
+            'url' => $request->fullUrl(),
+            'headers' => collect($request->headers->all())->except(['cookie'])->toArray(),
+            'payload' => $request->all(),
+            'ip_address' => $request->ip(),
+        ]);
+
         if (!$this->verifySignature($request)) {
             Log::warning('Lodgify webhook signature verification failed');
+
+            $webhookLog->update([
+                'status_code' => 401,
+                'response_body' => ['error' => 'Invalid signature'],
+            ]);
+
             return response()->json(['error' => 'Invalid signature'], 401);
         }
 

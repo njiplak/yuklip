@@ -3,6 +3,7 @@
 use App\Http\Controllers\Concierge\BookingController;
 use App\Http\Controllers\Concierge\OfferController;
 use App\Http\Controllers\Concierge\SystemLogController;
+use App\Http\Controllers\Concierge\WebhookLogController;
 use App\Http\Controllers\Concierge\TransactionController;
 use App\Http\Controllers\Concierge\UpsellLogController;
 use Illuminate\Support\Facades\Route;
@@ -50,5 +51,10 @@ Route::group(['middleware' => 'auth', 'prefix' => 'concierge', 'as' => 'backoffi
     Route::group(['prefix' => 'system-log', 'as' => 'system-log.'], function () {
         Route::get('/', [SystemLogController::class, 'index'])->name('index');
         Route::get('/fetch', [SystemLogController::class, 'fetch'])->name('fetch');
+    });
+
+    Route::group(['prefix' => 'webhook-log', 'as' => 'webhook-log.'], function () {
+        Route::get('/', [WebhookLogController::class, 'index'])->name('index');
+        Route::get('/fetch', [WebhookLogController::class, 'fetch'])->name('fetch');
     });
 });
