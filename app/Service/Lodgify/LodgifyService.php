@@ -41,7 +41,9 @@ class LodgifyService
             'target_url' => $targetUrl,
         ]);
 
-        return $response->json();
+        $data = $response->json();
+
+        return is_array($data) ? $data : ['raw' => $data];
     }
 
     /**
