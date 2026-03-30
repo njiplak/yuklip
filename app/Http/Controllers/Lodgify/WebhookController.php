@@ -39,6 +39,13 @@ class WebhookController extends Controller
             return response()->json(['error' => 'Invalid signature'], 401);
         }
 
+        // Lodgify sends the payload as a JSON array with a single element.
+        // Unwrap it so the rest of the controller can use $request->input() normally.
+        $data = $request->all();
+        if (array_is_list($data) && count($data) === 1) {
+            $request->replace($data[0]);
+        }
+
         $action = $request->input('action');
 
         return match ($action) {
@@ -323,7 +330,7 @@ class WebhookController extends Controller
             return false;
         }
 
-        $expected = 'sha256=' . hash_hmac('sha256', $request->getContent(), $secret);
+        $expected = 'sha256=' . strtoupper(hash_hmac('sha256', $request->getContent(), $secret));
 
         return hash_equals($expected, $signature);
     }
