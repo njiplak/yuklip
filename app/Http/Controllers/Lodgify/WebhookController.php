@@ -300,6 +300,10 @@ class WebhookController extends Controller
         $signature = $request->header('ms-signature');
 
         if (!$signature) {
+            Log::warning('Lodgify webhook missing ms-signature header', [
+                'headers' => collect($request->headers->all())->except(['cookie', 'authorization'])->toArray(),
+                'body_preview' => substr($request->getContent(), 0, 500),
+            ]);
             return false;
         }
 
