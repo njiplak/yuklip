@@ -1,8 +1,13 @@
 import { Link, usePage } from '@inertiajs/react';
 import {
+    CalendarCheck,
     ChevronsUpDown,
+    CreditCard,
+    Gift,
     LayoutDashboard,
     LogOut,
+    Megaphone,
+    ScrollText,
     Settings,
 } from 'lucide-react';
 import AppLogo from '@/components/app-logo';
@@ -158,6 +163,60 @@ export default function AppLayout({ children }: AppLayoutProps) {
                                         </Link>
                                     </SidebarMenuButton>
                                 </SidebarMenuItem>
+                            </SidebarMenu>
+                        </SidebarGroupContent>
+                    </SidebarGroup>
+                    <SidebarGroup>
+                        <SidebarGroupLabel>Concierge</SidebarGroupLabel>
+                        <SidebarGroupContent>
+                            <SidebarMenu>
+                                <SidebarMenuItem>
+                                    <SidebarMenuButton asChild isActive={isMenuActive(backoffice.concierge.booking.index.url())}>
+                                        <Link href={backoffice.concierge.booking.index.url()}>
+                                            <CalendarCheck />
+                                            <span>Bookings</span>
+                                        </Link>
+                                    </SidebarMenuButton>
+                                </SidebarMenuItem>
+                                <SidebarMenuItem>
+                                    <SidebarMenuButton asChild isActive={isMenuActive(backoffice.concierge.offer.index.url())}>
+                                        <Link href={backoffice.concierge.offer.index.url()}>
+                                            <Gift />
+                                            <span>Offers</span>
+                                        </Link>
+                                    </SidebarMenuButton>
+                                </SidebarMenuItem>
+                                <SidebarMenuItem>
+                                    <SidebarMenuButton asChild isActive={isMenuActive(backoffice.concierge.transaction.index.url())}>
+                                        <Link href={backoffice.concierge.transaction.index.url()}>
+                                            <CreditCard />
+                                            <span>Transactions</span>
+                                        </Link>
+                                    </SidebarMenuButton>
+                                </SidebarMenuItem>
+                                <SidebarMenuItem>
+                                    <SidebarMenuButton asChild isActive={isMenuActive(backoffice.concierge.upsellLog.index.url())}>
+                                        <Link href={backoffice.concierge.upsellLog.index.url()}>
+                                            <Megaphone />
+                                            <span>Upsell Logs</span>
+                                        </Link>
+                                    </SidebarMenuButton>
+                                </SidebarMenuItem>
+                                <SidebarMenuItem>
+                                    <SidebarMenuButton asChild isActive={isMenuActive(backoffice.concierge.systemLog.index.url())}>
+                                        <Link href={backoffice.concierge.systemLog.index.url()}>
+                                            <ScrollText />
+                                            <span>System Logs</span>
+                                        </Link>
+                                    </SidebarMenuButton>
+                                </SidebarMenuItem>
+                            </SidebarMenu>
+                        </SidebarGroupContent>
+                    </SidebarGroup>
+                    <SidebarGroup>
+                        <SidebarGroupLabel>Settings</SidebarGroupLabel>
+                        <SidebarGroupContent>
+                            <SidebarMenu>
                                 <SidebarMenuItem>
                                     <SidebarMenuButton asChild isActive={isMenuActive(backoffice.setting.setting.index.url())}>
                                         <Link href={backoffice.setting.setting.index.url()}>
