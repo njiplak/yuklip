@@ -34,6 +34,9 @@ class Booking extends Model
         'pref_bed_type',
         'pref_airport_transfer',
         'pref_special_requests',
+        'follow_up_count',
+        'preferences_briefing_sent',
+        'revenue_logged',
         'lodgify_synced_at',
         'current_upsell_offer_id',
         'upsell_offer_sent_at',
@@ -45,6 +48,8 @@ class Booking extends Model
             'check_in' => 'date',
             'check_out' => 'date',
             'total_amount' => 'decimal:2',
+            'preferences_briefing_sent' => 'boolean',
+            'revenue_logged' => 'boolean',
             'lodgify_synced_at' => 'datetime',
             'upsell_offer_sent_at' => 'datetime',
         ];

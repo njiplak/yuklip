@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Jobs\CancellationRecoveryJob;
 use App\Models\Booking;
 use App\Models\SystemLog;
+use App\Models\Transaction;
 use App\Models\WebhookLog;
 use App\Models\WhatsappMessage;
 use App\Service\WhatsApp\TwoChatService;
@@ -127,6 +128,21 @@ class WebhookController extends Controller
             'duration_ms' => (int) ((microtime(true) - $start) * 1000),
         ]);
 
+        // Auto-log booking revenue (once, on creation, if amount > 0)
+        if ($booking->wasRecentlyCreated && !$booking->revenue_logged && $booking->total_amount > 0) {
+            Transaction::create([
+                'booking_id' => $booking->id,
+                'type' => 'income',
+                'category' => 'accommodation',
+                'description' => "Booking: {$booking->guest_name} ({$booking->suite_name})",
+                'amount' => $booking->total_amount,
+                'currency' => $booking->currency,
+                'transaction_date' => now()->toDateString(),
+                'recorded_by' => 'system',
+            ]);
+            $booking->update(['revenue_logged' => true]);
+        }
+
         // Send welcome message for new confirmed bookings
         if ($booking->wasRecentlyCreated && $booking->booking_status === 'confirmed' && $booking->guest_phone) {
             try {
@@ -215,6 +231,7 @@ class WebhookController extends Controller
 
         $booking->update([
             'booking_status' => 'cancelled',
+            'conversation_state' => 'cancelled',
             'lodgify_synced_at' => now(),
         ]);
 
@@ -224,6 +241,9 @@ class WebhookController extends Controller
             'booking_id' => $booking->id,
             'status' => 'success',
         ]);
+
+        // Alert manager/owner immediately
+        $this->sendCancellationAlert($booking, $twoChat);
 
         // Only send recovery if guest has a phone number and not already scheduled
         if ($booking->guest_phone) {
@@ -272,6 +292,49 @@ class WebhookController extends Controller
         }
 
         return response()->json(['status' => 'ok']);
+    }
+
+    protected function sendCancellationAlert(Booking $booking, TwoChatService $twoChat): void
+    {
+        $staffNumber = config('whatsapp.staff_phone_number');
+
+        if (!$staffNumber) {
+            return;
+        }
+
+        $daysUntilCheckIn = now()->diffInDays($booking->check_in, false);
+        $urgency = $daysUntilCheckIn <= 3 ? 'URGENT — ' : '';
+
+        $alert = implode("\n", [
+            "{$urgency}BOOKING CANCELLED",
+            "",
+            "Guest: {$booking->guest_name}",
+            "Suite: {$booking->suite_name}",
+            "Dates: {$booking->check_in->format('d M')} - {$booking->check_out->format('d M')} ({$booking->num_nights} nights)",
+            "Value: {$booking->total_amount} {$booking->currency}",
+            "Source: {$booking->booking_source}",
+            $daysUntilCheckIn > 0 ? "Days until check-in: {$daysUntilCheckIn}" : "Check-in date has passed",
+            "",
+            "Recovery message will be sent to the guest in 30 minutes.",
+        ]);
+
+        try {
+            $twoChat->sendMessage($staffNumber, $alert);
+
+            WhatsappMessage::create([
+                'direction' => 'outbound',
+                'phone_number' => $staffNumber,
+                'message_body' => $alert,
+                'agent_source' => 'cancellation_alert',
+                'booking_id' => $booking->id,
+                'sent_at' => now(),
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Cancellation alert failed', [
+                'booking_id' => $booking->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     protected function sendWelcomeMessage(Booking $booking, TwoChatService $twoChat): void

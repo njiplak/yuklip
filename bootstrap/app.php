@@ -35,6 +35,8 @@ return Application::configure(basePath: dirname(__DIR__))
         }
     )
     ->withSchedule(function (Schedule $schedule) {
+        $schedule->job(new \App\Jobs\CheckoutArchiveJob, 'agents')->dailyAt('02:00')->timezone('Africa/Casablanca');
+        $schedule->job(new \App\Jobs\FollowUpJob, 'agents')->dailyAt('02:30')->timezone('Africa/Casablanca');
         $schedule->job(new \App\Jobs\StaffBriefingJob, 'agents')->dailyAt('08:00')->timezone('Africa/Casablanca');
         $schedule->job(new \App\Jobs\UpsellBroadcastJob, 'agents')->dailyAt('09:00')->timezone('Africa/Casablanca');
         $schedule->job(new \App\Jobs\UpsellBroadcastJob, 'agents')->dailyAt('15:00')->timezone('Africa/Casablanca');

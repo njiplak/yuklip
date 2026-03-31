@@ -101,6 +101,28 @@ class WebhookController extends Controller
             return $this->sendFallbackReply($phone, $twoChat);
         }
 
+        // Bot stays silent when guest is in manager handover or cancelled state
+        if (in_array($booking->conversation_state, ['handover_human', 'cancelled'])) {
+            SystemLog::create([
+                'agent' => 'guest_reply',
+                'action' => 'skipped',
+                'booking_id' => $booking->id,
+                'status' => 'skipped',
+                'payload' => ['reason' => 'state_' . $booking->conversation_state],
+            ]);
+            return WebResponse::json(null, 'Skipped — ' . $booking->conversation_state);
+        }
+
+        // Non-text messages (images, voice notes, videos) — politely ask for text
+        if (str_starts_with($text, '[Sent a ')) {
+            return $this->handleNonTextMessage($booking, $text, $twoChat);
+        }
+
+        // Reset follow-up count on any guest reply (they're engaging)
+        if ($booking->follow_up_count > 0) {
+            $booking->update(['follow_up_count' => 0]);
+        }
+
         if ($this->isPendingUpsellReply($booking)) {
             return $this->handleUpsellReply($booking, $text, $twoChat);
         }
@@ -141,8 +163,9 @@ class WebhookController extends Controller
                 'duration_ms' => (int) ((microtime(true) - $start) * 1000),
             ]);
 
-            // Send staff briefing if preferences just completed
-            if ($booking->conversation_state === 'preferences_complete') {
+            // Send staff briefing once when preferences first complete
+            if ($booking->conversation_state === 'preferences_complete' && !$booking->preferences_briefing_sent) {
+                $booking->update(['preferences_briefing_sent' => true]);
                 $this->sendPreferencesBriefing($booking, $twoChat);
             }
 
@@ -327,17 +350,21 @@ class WebhookController extends Controller
                 ]);
             }
 
-            if ($classification === 'accepted' && $offer->price) {
-                Transaction::create([
-                    'booking_id' => $booking->id,
-                    'type' => 'income',
-                    'category' => 'upsell',
-                    'description' => "Upsell: {$offer->title}",
-                    'amount' => $offer->price,
-                    'currency' => $offer->currency,
-                    'transaction_date' => now()->toDateString(),
-                    'recorded_by' => 'system',
-                ]);
+            if ($classification === 'accepted') {
+                if ($offer->price) {
+                    Transaction::create([
+                        'booking_id' => $booking->id,
+                        'type' => 'income',
+                        'category' => 'upsell',
+                        'description' => "Upsell: {$offer->title}",
+                        'amount' => $offer->price,
+                        'currency' => $offer->currency,
+                        'transaction_date' => now()->toDateString(),
+                        'recorded_by' => 'system',
+                    ]);
+                }
+
+                $this->notifyManagerUpsellAccepted($booking, $offer, $twoChat);
             }
 
             if (in_array($classification, ['accepted', 'declined'])) {
@@ -433,6 +460,75 @@ class WebhookController extends Controller
         ]);
 
         return WebResponse::json(null, 'Fallback sent');
+    }
+
+    protected function handleNonTextMessage(Booking $booking, string $mediaPlaceholder, TwoChatService $twoChat): JsonResponse
+    {
+        $reply = "I can only read text messages for now. Could you type out your message instead? I'm happy to help with anything you need!";
+
+        try {
+            $result = $twoChat->sendMessage($booking->guest_phone, $reply);
+
+            WhatsappMessage::create([
+                'booking_id' => $booking->id,
+                'direction' => 'outbound',
+                'phone_number' => $booking->guest_phone,
+                'message_body' => $reply,
+                'agent_source' => 'guest_reply',
+                'twochat_message_id' => $result['message_uuid'] ?? null,
+                'sent_at' => now(),
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Non-text reply failed', ['booking_id' => $booking->id, 'error' => $e->getMessage()]);
+        }
+
+        SystemLog::create([
+            'agent' => 'guest_reply',
+            'action' => 'non_text_received',
+            'booking_id' => $booking->id,
+            'status' => 'success',
+            'payload' => ['media' => $mediaPlaceholder],
+        ]);
+
+        return WebResponse::json(null, 'Non-text handled');
+    }
+
+    protected function notifyManagerUpsellAccepted(Booking $booking, \App\Models\Offer $offer, TwoChatService $twoChat): void
+    {
+        $staffNumber = config('whatsapp.staff_phone_number');
+
+        if (!$staffNumber) {
+            return;
+        }
+
+        $alert = implode("\n", [
+            "UPSELL ACCEPTED",
+            "",
+            "Guest: {$booking->guest_name}",
+            "Suite: {$booking->suite_name}",
+            "Offer: {$offer->title}",
+            "Price: {$offer->price} {$offer->currency}",
+            "",
+            "Please prepare this service for the guest.",
+        ]);
+
+        try {
+            $twoChat->sendMessage($staffNumber, $alert);
+
+            WhatsappMessage::create([
+                'direction' => 'outbound',
+                'phone_number' => $staffNumber,
+                'message_body' => $alert,
+                'agent_source' => 'upsell_recv',
+                'booking_id' => $booking->id,
+                'sent_at' => now(),
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Manager upsell notification failed', [
+                'booking_id' => $booking->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     protected function isPendingUpsellReply(Booking $booking): bool

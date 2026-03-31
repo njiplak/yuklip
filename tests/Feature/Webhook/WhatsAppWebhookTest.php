@@ -1,6 +1,7 @@
 <?php
 
 use App\Ai\Agents\GuestReplyAgent;
+use App\Ai\Agents\PreferenceExtractorAgent;
 use App\Ai\Agents\UpsellReplyAgent;
 use App\Models\Booking;
 use App\Models\Offer;
@@ -11,13 +12,24 @@ use App\Models\WhatsappMessage;
 use Illuminate\Support\Facades\Http;
 
 beforeEach(function () {
-    config(['whatsapp.webhook_secret' => 'test-whatsapp-secret']);
     Http::fake([
         'api.p.2chat.io/*' => Http::response(['message_uuid' => 'fake-uuid'], 200),
+        'api.p.p.2chat.io/*' => Http::response(['message_uuid' => 'fake-uuid'], 200),
     ]);
     // Fake AI agents to avoid real API calls
     GuestReplyAgent::fake(['Hello! Welcome to Riad Larbi Khalis. How can I help you?']);
     UpsellReplyAgent::fake([['classification' => 'accepted', 'reply_message' => 'Wonderful! Your hammam is booked.']]);
+    PreferenceExtractorAgent::fake([['arrival_time' => null, 'bed_type' => null, 'airport_transfer' => null, 'special_requests' => null]]);
+});
+
+test('rejects webhook with wrong User-Agent', function () {
+    $response = $this->postJson('/whatsapp/webhook', [
+        'remote_phone_number' => '+33612345678',
+        'sent_by' => 'user',
+        'message' => ['text' => 'Hello'],
+    ], ['User-Agent' => 'curl/8.0']);
+
+    $response->assertStatus(403);
 });
 
 test('skips non-user messages', function () {
@@ -55,6 +67,7 @@ test('stores inbound message and sends AI reply for active booking', function ()
     $booking = Booking::factory()->create([
         'guest_phone' => '+33612345678',
         'booking_status' => 'checked_in',
+        'conversation_state' => 'preferences_complete',
     ]);
 
     $response = $this->postJson('/whatsapp/webhook', [
@@ -62,7 +75,6 @@ test('stores inbound message and sends AI reply for active booking', function ()
         'sent_by' => 'user',
         'uuid' => 'MSG-123',
         'message' => ['text' => 'What is the WiFi password?'],
-        'contact' => ['first_name' => 'Pierre', 'last_name' => 'Dupont'],
     ], whatsappHeaders());
 
     $response->assertOk();
@@ -106,10 +118,11 @@ test('sends fallback reply when no active booking found', function () {
     expect(SystemLog::where('action', 'skipped')->count())->toBe(1);
 });
 
-test('extracts text from media-only message', function () {
+test('handles non-text messages with polite rejection', function () {
     Booking::factory()->create([
         'guest_phone' => '+33612345678',
         'booking_status' => 'confirmed',
+        'conversation_state' => 'waiting_preferences',
     ]);
 
     $this->postJson('/whatsapp/webhook', [
@@ -118,14 +131,85 @@ test('extracts text from media-only message', function () {
         'message' => ['media' => ['type' => 'image', 'mime_type' => 'image/jpeg']],
     ], whatsappHeaders());
 
+    // Inbound message stored as media placeholder
     $inbound = WhatsappMessage::where('direction', 'inbound')->first();
     expect($inbound->message_body)->toBe('[Sent a image]');
+
+    // Polite text-only reply sent
+    $outbound = WhatsappMessage::where('direction', 'outbound')->first();
+    expect($outbound->message_body)->toContain('text messages');
+
+    // Logged as non-text
+    expect(SystemLog::where('action', 'non_text_received')->count())->toBe(1);
+});
+
+test('bot stays silent when booking is in handover_human state', function () {
+    Booking::factory()->create([
+        'guest_phone' => '+33612345678',
+        'booking_status' => 'confirmed',
+        'conversation_state' => 'handover_human',
+    ]);
+
+    $this->postJson('/whatsapp/webhook', [
+        'remote_phone_number' => '+33612345678',
+        'sent_by' => 'user',
+        'message' => ['text' => 'Hello?'],
+    ], whatsappHeaders());
+
+    // Inbound stored
+    expect(WhatsappMessage::where('direction', 'inbound')->count())->toBe(1);
+
+    // No outbound reply (bot is silent)
+    expect(WhatsappMessage::where('direction', 'outbound')->count())->toBe(0);
+
+    // Logged as skipped
+    $log = SystemLog::where('action', 'skipped')->first();
+    expect($log->payload['reason'])->toBe('state_handover_human');
+});
+
+test('bot stays silent when booking is cancelled', function () {
+    Booking::factory()->create([
+        'guest_phone' => '+33612345678',
+        'booking_status' => 'cancelled',
+        'conversation_state' => 'cancelled',
+    ]);
+
+    // Cancelled bookings are not returned by the phone lookup (only confirmed/checked_in),
+    // so the guest gets a fallback reply instead
+    $this->postJson('/whatsapp/webhook', [
+        'remote_phone_number' => '+33612345678',
+        'sent_by' => 'user',
+        'message' => ['text' => 'Hello?'],
+    ], whatsappHeaders());
+
+    // Should get fallback (no active booking)
+    $outbound = WhatsappMessage::where('direction', 'outbound')->first();
+    expect($outbound->message_body)->toContain("don't have an active booking");
+});
+
+test('resets follow-up count when guest replies', function () {
+    $booking = Booking::factory()->create([
+        'guest_phone' => '+33612345678',
+        'booking_status' => 'confirmed',
+        'conversation_state' => 'waiting_preferences',
+        'follow_up_count' => 1,
+    ]);
+
+    $this->postJson('/whatsapp/webhook', [
+        'remote_phone_number' => '+33612345678',
+        'sent_by' => 'user',
+        'message' => ['text' => 'I arrive at 3pm'],
+    ], whatsappHeaders());
+
+    $booking->refresh();
+    expect($booking->follow_up_count)->toBe(0);
 });
 
 test('extracts text from edited message', function () {
     Booking::factory()->create([
         'guest_phone' => '+33612345678',
         'booking_status' => 'confirmed',
+        'conversation_state' => 'preferences_complete',
     ]);
 
     $this->postJson('/whatsapp/webhook', [
@@ -145,6 +229,7 @@ test('detects upsell reply and classifies as accepted', function () {
         'guest_phone' => '+33612345678',
         'current_upsell_offer_id' => $offer->id,
         'upsell_offer_sent_at' => now()->subHours(2),
+        'conversation_state' => 'preferences_complete',
     ]);
 
     UpsellLog::factory()->create([
@@ -184,6 +269,7 @@ test('does not trigger upsell handler if offer sent more than 48h ago', function
         'guest_phone' => '+33612345678',
         'current_upsell_offer_id' => $offer->id,
         'upsell_offer_sent_at' => now()->subHours(49),
+        'conversation_state' => 'preferences_complete',
     ]);
 
     $this->postJson('/whatsapp/webhook', [
@@ -198,7 +284,7 @@ test('does not trigger upsell handler if offer sent more than 48h ago', function
 });
 
 test('picks latest booking when multiple exist for same phone', function () {
-    $old = Booking::factory()->create([
+    Booking::factory()->create([
         'guest_phone' => '+33612345678',
         'booking_status' => 'checked_out',
         'check_in' => '2026-01-01',
@@ -208,6 +294,7 @@ test('picks latest booking when multiple exist for same phone', function () {
         'guest_phone' => '+33612345678',
         'booking_status' => 'checked_in',
         'check_in' => '2026-07-10',
+        'conversation_state' => 'preferences_complete',
     ]);
 
     $this->postJson('/whatsapp/webhook', [
@@ -220,23 +307,33 @@ test('picks latest booking when multiple exist for same phone', function () {
     expect($inbound->booking_id)->toBe($current->id);
 });
 
-test('rejects webhook when secret is not configured', function () {
-    config(['whatsapp.webhook_secret' => null]);
-
-    $response = $this->postJson('/whatsapp/webhook', [
-        'remote_phone_number' => '+33612345678',
-        'sent_by' => 'user',
-        'message' => ['text' => 'Hello'],
+test('deduplicates messages by UUID', function () {
+    Booking::factory()->create([
+        'guest_phone' => '+33612345678',
+        'booking_status' => 'confirmed',
+        'conversation_state' => 'preferences_complete',
     ]);
 
-    $response->assertStatus(403);
-    expect(WhatsappMessage::count())->toBe(0);
+    $payload = [
+        'remote_phone_number' => '+33612345678',
+        'sent_by' => 'user',
+        'uuid' => 'MSG-DUPLICATE-123',
+        'message' => ['text' => 'Hello'],
+    ];
+
+    // First request
+    $this->postJson('/whatsapp/webhook', $payload, whatsappHeaders());
+    expect(WhatsappMessage::where('direction', 'inbound')->count())->toBe(1);
+
+    // Second request with same UUID
+    $this->postJson('/whatsapp/webhook', $payload, whatsappHeaders());
+    expect(WhatsappMessage::where('direction', 'inbound')->count())->toBe(1);
 });
 
 /**
- * Return the WhatsApp webhook secret header.
+ * Return the WhatsApp webhook headers (User-Agent based auth).
  */
 function whatsappHeaders(): array
 {
-    return ['X-Webhook-Secret' => config('whatsapp.webhook_secret')];
+    return ['User-Agent' => '2Chat'];
 }
