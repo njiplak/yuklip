@@ -1,163 +1,235 @@
-import { router, useForm } from '@inertiajs/react';
-import { LoaderCircle } from 'lucide-react';
+import { router } from '@inertiajs/react';
+import { ArrowLeft } from 'lucide-react';
 
-import InputError from '@/components/input-error';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Textarea } from '@/components/ui/textarea';
 import AppLayout from '@/layouts/app-layout';
-import { FormResponse } from '@/lib/constant';
-import { index, store, update } from '@/routes/backoffice/concierge/booking';
-import type { Booking } from '@/types/booking';
+import { index } from '@/routes/backoffice/concierge/booking';
+import type { Booking, UpsellLog, WhatsappMessage } from '@/types/booking';
 
-const suites = ['Suite Al Andalus', 'Suite Zitoun', 'Suite Atlas', 'Suite Menara'];
-const statuses = ['confirmed', 'checked_in', 'checked_out', 'cancelled'];
-const sources = ['Airbnb', 'Direct', 'Booking.com'];
+const statusColor: Record<string, string> = {
+    confirmed: 'bg-blue-50 text-blue-700 ring-blue-700/10',
+    checked_in: 'bg-green-50 text-green-700 ring-green-700/10',
+    checked_out: 'bg-gray-50 text-gray-600 ring-gray-600/10',
+    cancelled: 'bg-red-50 text-red-700 ring-red-700/10',
+};
 
-type Props = { booking?: Booking };
+const upsellOutcomeColor: Record<string, string> = {
+    accepted: 'bg-green-50 text-green-700 ring-green-700/10',
+    declined: 'bg-red-50 text-red-700 ring-red-700/10',
+    pending: 'bg-yellow-50 text-yellow-700 ring-yellow-700/10',
+};
 
-export default function BookingForm({ booking }: Props) {
-    const { data, setData, post, put, errors, processing } = useForm({
-        lodgify_booking_id: booking?.lodgify_booking_id ?? '',
-        guest_name: booking?.guest_name ?? '',
-        guest_phone: booking?.guest_phone ?? '',
-        guest_email: booking?.guest_email ?? '',
-        guest_nationality: booking?.guest_nationality ?? '',
-        num_guests: booking?.num_guests ?? 1,
-        suite_name: booking?.suite_name ?? suites[0],
-        check_in: booking?.check_in ?? '',
-        check_out: booking?.check_out ?? '',
-        num_nights: booking?.num_nights ?? 1,
-        booking_source: booking?.booking_source ?? sources[0],
-        booking_status: booking?.booking_status ?? 'confirmed',
-        total_amount: booking?.total_amount ?? '',
-        currency: booking?.currency ?? 'MAD',
-        special_requests: booking?.special_requests ?? '',
-        internal_notes: booking?.internal_notes ?? '',
-    });
-
-    const onSubmit = (e: React.FormEvent<HTMLFormElement>) => {
-        e.preventDefault();
-        if (booking) {
-            put(update(booking.id).url, FormResponse);
-        } else {
-            post(store().url, FormResponse);
-        }
-    };
-
+function Field({ label, value }: { label: string; value: React.ReactNode }) {
     return (
-        <div className="flex flex-col gap-4 rounded-xl border border-border bg-card p-5 shadow-sm">
-            <h1 className="text-xl font-semibold">{booking ? 'Edit Booking' : 'New Booking'}</h1>
-            <form onSubmit={onSubmit} className="space-y-4">
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <div className="flex flex-col gap-1.5">
-                        <Label>Lodgify Booking ID</Label>
-                        <Input value={data.lodgify_booking_id} onChange={(e) => setData('lodgify_booking_id', e.target.value)} />
-                        <InputError message={errors?.lodgify_booking_id} />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                        <Label>Guest Name</Label>
-                        <Input value={data.guest_name} onChange={(e) => setData('guest_name', e.target.value)} />
-                        <InputError message={errors?.guest_name} />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                        <Label>Phone</Label>
-                        <Input value={data.guest_phone} onChange={(e) => setData('guest_phone', e.target.value)} />
-                        <InputError message={errors?.guest_phone} />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                        <Label>Email</Label>
-                        <Input type="email" value={data.guest_email} onChange={(e) => setData('guest_email', e.target.value)} />
-                        <InputError message={errors?.guest_email} />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                        <Label>Nationality</Label>
-                        <Input value={data.guest_nationality} onChange={(e) => setData('guest_nationality', e.target.value)} />
-                        <InputError message={errors?.guest_nationality} />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                        <Label>Number of Guests</Label>
-                        <Input type="number" min={1} value={data.num_guests} onChange={(e) => setData('num_guests', Number(e.target.value))} />
-                        <InputError message={errors?.num_guests} />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                        <Label>Suite</Label>
-                        <Select value={data.suite_name} onValueChange={(v) => setData('suite_name', v)}>
-                            <SelectTrigger><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                                {suites.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                            </SelectContent>
-                        </Select>
-                        <InputError message={errors?.suite_name} />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                        <Label>Check In</Label>
-                        <Input type="date" value={data.check_in} onChange={(e) => setData('check_in', e.target.value)} />
-                        <InputError message={errors?.check_in} />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                        <Label>Check Out</Label>
-                        <Input type="date" value={data.check_out} onChange={(e) => setData('check_out', e.target.value)} />
-                        <InputError message={errors?.check_out} />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                        <Label>Nights</Label>
-                        <Input type="number" min={1} value={data.num_nights} onChange={(e) => setData('num_nights', Number(e.target.value))} />
-                        <InputError message={errors?.num_nights} />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                        <Label>Source</Label>
-                        <Select value={data.booking_source} onValueChange={(v) => setData('booking_source', v)}>
-                            <SelectTrigger><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                                {sources.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                            </SelectContent>
-                        </Select>
-                        <InputError message={errors?.booking_source} />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                        <Label>Status</Label>
-                        <Select value={data.booking_status} onValueChange={(v) => setData('booking_status', v)}>
-                            <SelectTrigger><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                                {statuses.map((s) => <SelectItem key={s} value={s}>{s.replace('_', ' ')}</SelectItem>)}
-                            </SelectContent>
-                        </Select>
-                        <InputError message={errors?.booking_status} />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                        <Label>Total Amount</Label>
-                        <Input type="number" step="0.01" value={data.total_amount} onChange={(e) => setData('total_amount', e.target.value)} />
-                        <InputError message={errors?.total_amount} />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                        <Label>Currency</Label>
-                        <Input value={data.currency} onChange={(e) => setData('currency', e.target.value)} />
-                        <InputError message={errors?.currency} />
-                    </div>
-                </div>
-                <div className="flex flex-col gap-1.5">
-                    <Label>Special Requests</Label>
-                    <Textarea rows={3} value={data.special_requests} onChange={(e) => setData('special_requests', e.target.value)} />
-                    <InputError message={errors?.special_requests} />
-                </div>
-                <div className="flex flex-col gap-1.5">
-                    <Label>Internal Notes</Label>
-                    <Textarea rows={3} value={data.internal_notes} onChange={(e) => setData('internal_notes', e.target.value)} />
-                    <InputError message={errors?.internal_notes} />
-                </div>
-                <div className="flex flex-col gap-2 sm:flex-row">
-                    <Button type="button" variant="outline" onClick={() => router.visit(index().url)}>Cancel</Button>
-                    <Button type="submit" disabled={processing}>
-                        {processing && <LoaderCircle className="size-4 animate-spin" />}
-                        Save
-                    </Button>
-                </div>
-            </form>
+        <div className="flex flex-col gap-0.5">
+            <span className="text-xs font-medium text-muted-foreground">{label}</span>
+            <span className="text-sm">{value || <span className="text-muted-foreground">-</span>}</span>
         </div>
     );
 }
 
-BookingForm.layout = (page: React.ReactNode) => <AppLayout>{page}</AppLayout>;
+function Badge({ text, color }: { text: string; color: string }) {
+    return (
+        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${color}`}>
+            {text.replace('_', ' ')}
+        </span>
+    );
+}
+
+function formatDate(date: string | null): string {
+    if (!date) return '-';
+    return new Date(date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function formatDateTime(date: string | null): string {
+    if (!date) return '-';
+    return new Date(date).toLocaleString('en-GB', {
+        day: 'numeric', month: 'short', year: 'numeric',
+        hour: '2-digit', minute: '2-digit',
+    });
+}
+
+function GuestInfo({ booking }: { booking: Booking }) {
+    return (
+        <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
+            <h2 className="mb-4 text-base font-semibold">Guest Information</h2>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <Field label="Name" value={booking.guest_name} />
+                <Field label="Phone" value={booking.guest_phone} />
+                <Field label="Email" value={booking.guest_email} />
+                <Field label="Nationality" value={booking.guest_nationality} />
+                <Field label="Number of Guests" value={booking.num_guests} />
+                <Field
+                    label="Status"
+                    value={<Badge text={booking.booking_status} color={statusColor[booking.booking_status] ?? ''} />}
+                />
+            </div>
+        </div>
+    );
+}
+
+function StayDetails({ booking }: { booking: Booking }) {
+    return (
+        <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
+            <h2 className="mb-4 text-base font-semibold">Stay Details</h2>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <Field label="Suite" value={booking.suite_name} />
+                <Field label="Check-in" value={formatDate(booking.check_in)} />
+                <Field label="Check-out" value={formatDate(booking.check_out)} />
+                <Field label="Nights" value={booking.num_nights} />
+                <Field label="Source" value={booking.booking_source} />
+                <Field label="Total" value={`${booking.total_amount} ${booking.currency}`} />
+                <Field label="Lodgify ID" value={booking.lodgify_booking_id} />
+            </div>
+            {(booking.special_requests || booking.internal_notes) && (
+                <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    {booking.special_requests && (
+                        <div className="flex flex-col gap-0.5">
+                            <span className="text-xs font-medium text-muted-foreground">Special Requests</span>
+                            <p className="text-sm whitespace-pre-wrap rounded bg-muted/50 p-2">{booking.special_requests}</p>
+                        </div>
+                    )}
+                    {booking.internal_notes && (
+                        <div className="flex flex-col gap-0.5">
+                            <span className="text-xs font-medium text-muted-foreground">Internal Notes</span>
+                            <p className="text-sm whitespace-pre-wrap rounded bg-muted/50 p-2">{booking.internal_notes}</p>
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function ConversationLog({ messages }: { messages: WhatsappMessage[] }) {
+    if (!messages || messages.length === 0) {
+        return (
+            <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
+                <h2 className="mb-2 text-base font-semibold">WhatsApp Conversation</h2>
+                <p className="text-sm text-muted-foreground">No messages yet.</p>
+            </div>
+        );
+    }
+
+    const sorted = [...messages].sort(
+        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    );
+
+    return (
+        <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
+            <h2 className="mb-4 text-base font-semibold">WhatsApp Conversation</h2>
+            <div className="flex flex-col gap-2 max-h-[500px] overflow-y-auto">
+                {sorted.map((msg) => (
+                    <div
+                        key={msg.id}
+                        className={`flex ${msg.direction === 'outbound' ? 'justify-start' : 'justify-end'}`}
+                    >
+                        <div
+                            className={`max-w-[75%] rounded-lg px-3 py-2 text-sm ${
+                                msg.direction === 'outbound'
+                                    ? 'bg-muted text-foreground'
+                                    : 'bg-primary text-primary-foreground'
+                            }`}
+                        >
+                            <p className="whitespace-pre-wrap break-words">{msg.message_body}</p>
+                            <div className={`mt-1 flex items-center gap-2 text-[10px] ${
+                                msg.direction === 'outbound' ? 'text-muted-foreground' : 'text-primary-foreground/70'
+                            }`}>
+                                <span>{formatDateTime(msg.sent_at ?? msg.received_at ?? msg.created_at)}</span>
+                                {msg.agent_source && (
+                                    <span className="rounded bg-black/10 px-1 py-0.5">{msg.agent_source}</span>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+function UpsellHistory({ logs }: { logs: UpsellLog[] }) {
+    if (!logs || logs.length === 0) {
+        return (
+            <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
+                <h2 className="mb-2 text-base font-semibold">Upsell History</h2>
+                <p className="text-sm text-muted-foreground">No upsell offers sent.</p>
+            </div>
+        );
+    }
+
+    const sorted = [...logs].sort(
+        (a, b) => new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime()
+    );
+
+    return (
+        <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
+            <h2 className="mb-4 text-base font-semibold">Upsell History</h2>
+            <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                    <thead>
+                        <tr className="border-b text-left text-xs text-muted-foreground">
+                            <th className="pb-2 pr-4 font-medium">Offer</th>
+                            <th className="pb-2 pr-4 font-medium">Sent</th>
+                            <th className="pb-2 pr-4 font-medium">Outcome</th>
+                            <th className="pb-2 pr-4 font-medium">Guest Reply</th>
+                            <th className="pb-2 font-medium">Revenue</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {sorted.map((log) => (
+                            <tr key={log.id} className="border-b last:border-0">
+                                <td className="py-2 pr-4">{log.offer?.title ?? `Offer #${log.offer_id}`}</td>
+                                <td className="py-2 pr-4 text-muted-foreground">{formatDateTime(log.sent_at)}</td>
+                                <td className="py-2 pr-4">
+                                    {log.outcome ? (
+                                        <Badge text={log.outcome} color={upsellOutcomeColor[log.outcome] ?? 'bg-gray-50 text-gray-600 ring-gray-600/10'} />
+                                    ) : '-'}
+                                </td>
+                                <td className="py-2 pr-4 max-w-[200px] truncate">{log.guest_reply ?? '-'}</td>
+                                <td className="py-2">{log.revenue_generated ? `${log.revenue_generated} MAD` : '-'}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+}
+
+type Props = { booking?: Booking };
+
+export default function BookingDetail({ booking }: Props) {
+    if (!booking) {
+        return (
+            <div className="flex flex-col items-center justify-center gap-4 py-20">
+                <p className="text-muted-foreground">Booking not found.</p>
+                <Button variant="outline" onClick={() => router.visit(index().url)}>Back to Bookings</Button>
+            </div>
+        );
+    }
+
+    return (
+        <div className="flex flex-col gap-4">
+            <div className="flex items-center gap-3">
+                <Button variant="ghost" size="icon" onClick={() => router.visit(index().url)}>
+                    <ArrowLeft className="size-4" />
+                </Button>
+                <div>
+                    <h1 className="text-xl font-semibold">{booking.guest_name}</h1>
+                    <p className="text-sm text-muted-foreground">
+                        {booking.suite_name} &middot; {formatDate(booking.check_in)} - {formatDate(booking.check_out)}
+                    </p>
+                </div>
+            </div>
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                <GuestInfo booking={booking} />
+                <StayDetails booking={booking} />
+            </div>
+            <ConversationLog messages={booking.whatsapp_messages ?? []} />
+            <UpsellHistory logs={booking.upsell_logs ?? []} />
+        </div>
+    );
+}
+
+BookingDetail.layout = (page: React.ReactNode) => <AppLayout>{page}</AppLayout>;

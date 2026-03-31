@@ -4,9 +4,6 @@ import IndexPage from '@/components/index-page';
 import AppLayout from '@/layouts/app-layout';
 import { createDateColumn } from '@/lib/column-helpers';
 import {
-    create,
-    destroy as destroyRoute,
-    destroyBulk,
     fetch as fetchRoute,
     show,
 } from '@/routes/backoffice/concierge/booking';
@@ -71,14 +68,13 @@ const columns: ColumnDef<Booking, any>[] = [
     }),
 ];
 
-const routes = { fetch: fetchRoute, destroy: destroyRoute, destroyBulk, show, create };
+const routes = { fetch: fetchRoute, show };
 
 export default function BookingIndex() {
     return (
         <IndexPage<Booking>
             title="Bookings"
-            description="Manage guest bookings"
-            addLabel="Add Booking"
+            description="Guest bookings synced from Lodgify"
             columns={columns}
             routes={routes}
         />
