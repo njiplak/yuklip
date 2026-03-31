@@ -20,6 +20,7 @@ Route::group(['middleware' => 'auth', 'prefix' => 'concierge', 'as' => 'backoffi
         Route::put('/{id}', [BookingController::class, 'update'])->name('update');
         Route::delete('/{id}', [BookingController::class, 'destroy'])->name('destroy');
         Route::post('/destroy-bulk', [BookingController::class, 'destroy_bulk'])->name('destroy-bulk');
+        Route::get('/{id}/export-conversation', [BookingController::class, 'exportConversation'])->name('export-conversation');
     });
 
     Route::group(['prefix' => 'offer', 'as' => 'offer.'], function () {

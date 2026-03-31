@@ -1,5 +1,5 @@
 import { router } from '@inertiajs/react';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Download } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import AppLayout from '@/layouts/app-layout';
@@ -148,7 +148,7 @@ function GuestPreferences({ booking }: { booking: Booking }) {
     );
 }
 
-function ConversationLog({ messages }: { messages: WhatsappMessage[] }) {
+function ConversationLog({ messages, bookingId }: { messages: WhatsappMessage[]; bookingId?: number }) {
     if (!messages || messages.length === 0) {
         return (
             <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
@@ -164,7 +164,19 @@ function ConversationLog({ messages }: { messages: WhatsappMessage[] }) {
 
     return (
         <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
-            <h2 className="mb-4 text-base font-semibold">WhatsApp Conversation</h2>
+            <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-base font-semibold">WhatsApp Conversation</h2>
+                {bookingId && (
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => window.location.href = `/concierge/booking/${bookingId}/export-conversation`}
+                    >
+                        <Download className="mr-1.5 size-3.5" />
+                        Export Chat
+                    </Button>
+                )}
+            </div>
             <div className="flex flex-col gap-2 max-h-[500px] overflow-y-auto">
                 {sorted.map((msg) => (
                     <div
@@ -274,7 +286,7 @@ export default function BookingDetail({ booking }: Props) {
                 <StayDetails booking={booking} />
             </div>
             <GuestPreferences booking={booking} />
-            <ConversationLog messages={booking.whatsapp_messages ?? []} />
+            <ConversationLog messages={booking.whatsapp_messages ?? []} bookingId={booking.id} />
             <UpsellHistory logs={booking.upsell_logs ?? []} />
         </div>
     );
