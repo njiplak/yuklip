@@ -4,6 +4,7 @@ import {
     ChevronsUpDown,
     CreditCard,
     Gift,
+    BarChart3,
     Globe,
     LayoutDashboard,
     LogOut,
@@ -200,6 +201,14 @@ export default function AppLayout({ children }: AppLayoutProps) {
                                         <Link href={backoffice.concierge.upsellLog.index.url()}>
                                             <Megaphone />
                                             <span>Upsell Logs</span>
+                                        </Link>
+                                    </SidebarMenuButton>
+                                </SidebarMenuItem>
+                                <SidebarMenuItem>
+                                    <SidebarMenuButton asChild isActive={isMenuActive(backoffice.concierge.report.index.url())}>
+                                        <Link href={backoffice.concierge.report.index.url()}>
+                                            <BarChart3 />
+                                            <span>Reports</span>
                                         </Link>
                                     </SidebarMenuButton>
                                 </SidebarMenuItem>

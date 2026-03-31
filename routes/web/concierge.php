@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Concierge\BookingController;
 use App\Http\Controllers\Concierge\OfferController;
+use App\Http\Controllers\Concierge\ReportController;
 use App\Http\Controllers\Concierge\SystemLogController;
 use App\Http\Controllers\Concierge\WebhookLogController;
 use App\Http\Controllers\Concierge\TransactionController;
@@ -56,5 +57,11 @@ Route::group(['middleware' => 'auth', 'prefix' => 'concierge', 'as' => 'backoffi
     Route::group(['prefix' => 'webhook-log', 'as' => 'webhook-log.'], function () {
         Route::get('/', [WebhookLogController::class, 'index'])->name('index');
         Route::get('/fetch', [WebhookLogController::class, 'fetch'])->name('fetch');
+    });
+
+    Route::group(['prefix' => 'report', 'as' => 'report.'], function () {
+        Route::get('/', [ReportController::class, 'index'])->name('index');
+        Route::get('/fetch', [ReportController::class, 'fetch'])->name('fetch');
+        Route::get('/export', [ReportController::class, 'export'])->name('export');
     });
 });
