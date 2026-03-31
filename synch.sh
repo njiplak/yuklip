@@ -155,6 +155,22 @@ else
   echo "No migration option provided. Skipping migrations..."
 fi
 
+# Ensure Laravel scheduler cron is installed (under www-data)
+ensure_scheduler_cron() {
+  local CRON_CMD="* * * * * cd ${APP_DIR} && php artisan schedule:run >> /dev/null 2>&1"
+  local CRON_MARKER="artisan schedule:run"
+
+  if crontab -u www-data -l 2>/dev/null | grep -qF "$CRON_MARKER"; then
+    echo "Laravel scheduler cron already installed."
+  else
+    echo "Installing Laravel scheduler cron for www-data..."
+    (crontab -u www-data -l 2>/dev/null; echo "$CRON_CMD") | crontab -u www-data -
+    echo "Scheduler cron installed."
+  fi
+}
+
+ensure_scheduler_cron
+
 # Ensure queue worker is set up and running
 ensure_queue_worker
 
