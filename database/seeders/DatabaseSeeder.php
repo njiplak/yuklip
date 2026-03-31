@@ -17,8 +17,6 @@ class DatabaseSeeder extends Seeder
         $this->call([
             SettingSeeder::class,
             OfferSeeder::class,
-            BookingSeeder::class,
-            UpsellLogSeeder::class,
         ]);
     }
 }
