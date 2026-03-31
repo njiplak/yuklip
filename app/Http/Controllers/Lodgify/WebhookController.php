@@ -277,7 +277,7 @@ class WebhookController extends Controller
     protected function sendWelcomeMessage(Booking $booking, TwoChatService $twoChat): void
     {
         $response = (new GuestReplyAgent($booking))->prompt(
-            'Generate a warm welcome message for this new guest. Introduce yourself as the Riad Larbi Khalis concierge and let them know you are available on WhatsApp for anything they need during their stay.'
+            'Generate a warm welcome message for this new guest. Introduce yourself as the concierge and let them know you are available on WhatsApp for anything they need during their stay. At the end, ask about their estimated arrival time to help prepare for their welcome. Keep it natural — just ask about arrival time for now, you will collect other preferences in follow-up messages.'
         );
 
         $message = (string) $response;

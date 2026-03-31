@@ -27,7 +27,7 @@ class GuestReplyAgent implements Agent, Conversational
         $systemPrompt = Setting::where('key', 'concierge_system_prompt')->value('value')
             ?? 'You are a helpful AI concierge. Be concise and friendly.';
 
-        $guestContext = implode("\n", [
+        $guestContext = implode("\n", array_filter([
             "## Current Guest Context",
             "- Guest: {$this->booking->guest_name}",
             "- Suite: {$this->booking->suite_name}",
@@ -35,11 +35,69 @@ class GuestReplyAgent implements Agent, Conversational
             "- Check-out: {$this->booking->check_out->format('Y-m-d')}",
             "- Nights: {$this->booking->num_nights}",
             "- Guests: {$this->booking->num_guests}",
-            $this->booking->guest_nationality ? "- Nationality: {$this->booking->guest_nationality}" : '',
-            $this->booking->special_requests ? "- Special Requests: {$this->booking->special_requests}" : '',
-        ]);
+            $this->booking->guest_nationality ? "- Nationality: {$this->booking->guest_nationality}" : null,
+            $this->booking->special_requests ? "- Special Requests: {$this->booking->special_requests}" : null,
+        ]));
 
-        return $systemPrompt . "\n\n" . $guestContext;
+        $preferenceInstructions = $this->preferenceInstructions();
+
+        return $systemPrompt . "\n\n" . $guestContext . ($preferenceInstructions ? "\n\n" . $preferenceInstructions : '');
+    }
+
+    protected function preferenceInstructions(): ?string
+    {
+        $state = $this->booking->conversation_state ?? 'preferences_complete';
+
+        if ($state === 'preferences_complete') {
+            return null;
+        }
+
+        $collected = [];
+        $missing = [];
+
+        if ($this->booking->pref_arrival_time) {
+            $collected[] = "Arrival time: {$this->booking->pref_arrival_time}";
+        } else {
+            $missing[] = 'arrival time';
+        }
+
+        if ($this->booking->pref_bed_type) {
+            $collected[] = "Bed type: {$this->booking->pref_bed_type}";
+        } else {
+            $missing[] = 'bed preference (double bed or twin beds)';
+        }
+
+        if ($this->booking->pref_airport_transfer) {
+            $collected[] = "Airport transfer: {$this->booking->pref_airport_transfer}";
+        } else {
+            $missing[] = 'whether they need airport transfer';
+        }
+
+        if ($this->booking->pref_special_requests) {
+            $collected[] = "Special requests: {$this->booking->pref_special_requests}";
+        } else {
+            $missing[] = 'any special requests (allergies, celebrations, dietary needs, etc.)';
+        }
+
+        $collectedText = empty($collected) ? 'Nothing yet.' : implode(', ', $collected);
+        $missingText = implode(', ', $missing);
+
+        return implode("\n", [
+            '## Preference Collection (ACTIVE)',
+            '',
+            'You are currently collecting stay preferences from this guest. This is your priority alongside answering any questions they have.',
+            '',
+            "Already collected: {$collectedText}",
+            "Still needed: {$missingText}",
+            '',
+            'Guidelines:',
+            '- If the guest provides preferences in their message, acknowledge them warmly.',
+            '- After acknowledging, naturally ask about the NEXT missing preference. Do not ask for multiple at once.',
+            '- If the guest asks a question (e.g. "what time is check-in?"), answer it first, then gently steer back to the missing preferences.',
+            '- If the guest seems reluctant or says "no special requests" or "that\'s all", that is fine — accept it.',
+            '- Never be pushy. The guest should feel like a natural conversation, not an interrogation.',
+            '- Match the guest\'s language and energy.',
+        ]);
     }
 
     /**

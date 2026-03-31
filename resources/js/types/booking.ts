@@ -18,6 +18,11 @@ export type Booking = Model & {
     currency: string;
     special_requests: string | null;
     internal_notes: string | null;
+    conversation_state: string;
+    pref_arrival_time: string | null;
+    pref_bed_type: string | null;
+    pref_airport_transfer: string | null;
+    pref_special_requests: string | null;
     current_upsell_offer_id: number | null;
     upsell_offer_sent_at: string | null;
     current_offer?: Offer;

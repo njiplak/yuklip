@@ -31,7 +31,19 @@ class StaffBriefingJob implements ShouldQueue
         $arrivals = Booking::where('check_in', $today)
             ->whereIn('booking_status', ['confirmed', 'checked_in'])
             ->get()
-            ->map(fn ($b) => $b->only(['guest_name', 'suite_name', 'num_guests', 'guest_nationality', 'special_requests']))
+            ->map(fn ($b) => [
+                'guest_name' => $b->guest_name,
+                'suite_name' => $b->suite_name,
+                'num_guests' => $b->num_guests,
+                'guest_nationality' => $b->guest_nationality,
+                'special_requests' => implode(' | ', array_filter([
+                    $b->pref_arrival_time ? "Arrival: {$b->pref_arrival_time}" : null,
+                    $b->pref_bed_type ? "Bed: {$b->pref_bed_type}" : null,
+                    $b->pref_airport_transfer ? "Transfer: {$b->pref_airport_transfer}" : null,
+                    $b->pref_special_requests && $b->pref_special_requests !== 'none' ? $b->pref_special_requests : null,
+                    $b->special_requests,
+                ])) ?: null,
+            ])
             ->all();
 
         $departures = Booking::where('check_out', $today)

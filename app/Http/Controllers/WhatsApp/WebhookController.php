@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\WhatsApp;
 
 use App\Ai\Agents\GuestReplyAgent;
+use App\Ai\Agents\PreferenceExtractorAgent;
+use App\Ai\Agents\StaffBriefingAgent;
 use App\Ai\Agents\UpsellReplyAgent;
 use App\Http\Controllers\Controller;
 use App\Models\Booking;
@@ -111,6 +113,11 @@ class WebhookController extends Controller
         $start = microtime(true);
 
         try {
+            // Extract preferences if still collecting
+            if ($booking->conversation_state !== 'preferences_complete') {
+                $this->extractPreferences($booking, $text);
+            }
+
             $response = (new GuestReplyAgent($booking))->prompt($text);
             $reply = (string) $response;
 
@@ -134,6 +141,11 @@ class WebhookController extends Controller
                 'duration_ms' => (int) ((microtime(true) - $start) * 1000),
             ]);
 
+            // Send staff briefing if preferences just completed
+            if ($booking->conversation_state === 'preferences_complete') {
+                $this->sendPreferencesBriefing($booking, $twoChat);
+            }
+
             return WebResponse::json(null, 'Reply sent');
         } catch (\Throwable $e) {
             Log::error('Guest reply failed', ['booking_id' => $booking->id, 'error' => $e->getMessage()]);
@@ -148,6 +160,131 @@ class WebhookController extends Controller
             ]);
 
             return WebResponse::json(null, 'Accepted', 200);
+        }
+    }
+
+    protected function extractPreferences(Booking $booking, string $text): void
+    {
+        try {
+            $result = (new PreferenceExtractorAgent($booking))->prompt($text);
+            $extracted = $result->toArray();
+
+            $updates = [];
+
+            if (!empty($extracted['arrival_time']) && !$booking->pref_arrival_time) {
+                $updates['pref_arrival_time'] = $extracted['arrival_time'];
+            }
+
+            if (!empty($extracted['bed_type']) && !$booking->pref_bed_type) {
+                $updates['pref_bed_type'] = $extracted['bed_type'];
+            }
+
+            if (!empty($extracted['airport_transfer']) && !$booking->pref_airport_transfer) {
+                $updates['pref_airport_transfer'] = $extracted['airport_transfer'];
+            }
+
+            if (!empty($extracted['special_requests']) && !$booking->pref_special_requests) {
+                $updates['pref_special_requests'] = $extracted['special_requests'];
+            }
+
+            if (!empty($updates)) {
+                $booking->update($updates);
+                $booking->refresh();
+
+                SystemLog::create([
+                    'agent' => 'preference_extractor',
+                    'action' => 'preferences_extracted',
+                    'booking_id' => $booking->id,
+                    'status' => 'success',
+                    'payload' => $updates,
+                ]);
+            }
+
+            // Update conversation state based on what's collected
+            $allCollected = $booking->pref_arrival_time
+                && $booking->pref_bed_type
+                && $booking->pref_airport_transfer
+                && $booking->pref_special_requests;
+
+            $anyCollected = $booking->pref_arrival_time
+                || $booking->pref_bed_type
+                || $booking->pref_airport_transfer
+                || $booking->pref_special_requests;
+
+            $newState = $allCollected
+                ? 'preferences_complete'
+                : ($anyCollected ? 'preferences_partial' : 'waiting_preferences');
+
+            if ($newState !== $booking->conversation_state) {
+                $booking->update(['conversation_state' => $newState]);
+                $booking->refresh();
+
+                SystemLog::create([
+                    'agent' => 'preference_extractor',
+                    'action' => 'state_changed',
+                    'booking_id' => $booking->id,
+                    'status' => 'success',
+                    'payload' => ['from' => $booking->getOriginal('conversation_state'), 'to' => $newState],
+                ]);
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Preference extraction failed, continuing with reply', [
+                'booking_id' => $booking->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    protected function sendPreferencesBriefing(Booking $booking, TwoChatService $twoChat): void
+    {
+        $staffNumber = config('whatsapp.staff_phone_number');
+
+        if (!$staffNumber) {
+            return;
+        }
+
+        try {
+            $arrivals = [[
+                'guest_name' => $booking->guest_name,
+                'suite_name' => $booking->suite_name,
+                'num_guests' => $booking->num_guests,
+                'guest_nationality' => $booking->guest_nationality,
+                'special_requests' => implode(' | ', array_filter([
+                    "Arrival: {$booking->pref_arrival_time}",
+                    "Bed: {$booking->pref_bed_type}",
+                    "Transfer: {$booking->pref_airport_transfer}",
+                    $booking->pref_special_requests !== 'none' ? $booking->pref_special_requests : null,
+                ])),
+            ]];
+
+            $response = (new StaffBriefingAgent($arrivals, []))->prompt(
+                'Generate a guest preparation briefing. All preferences have been collected from this guest via WhatsApp. Include all preference details so staff can prepare the suite and any transfers.'
+            );
+
+            $briefing = (string) $response;
+            $result = $twoChat->sendMessage($staffNumber, $briefing);
+
+            WhatsappMessage::create([
+                'direction' => 'outbound',
+                'phone_number' => $staffNumber,
+                'message_body' => $briefing,
+                'agent_source' => 'preference_briefing',
+                'booking_id' => $booking->id,
+                'twochat_message_id' => $result['message_uuid'] ?? null,
+                'sent_at' => now(),
+            ]);
+
+            SystemLog::create([
+                'agent' => 'preference_extractor',
+                'action' => 'briefing_sent',
+                'booking_id' => $booking->id,
+                'status' => 'success',
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Preferences briefing failed', [
+                'booking_id' => $booking->id,
+                'error' => $e->getMessage(),
+            ]);
         }
     }
 

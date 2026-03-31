@@ -101,6 +101,53 @@ function StayDetails({ booking }: { booking: Booking }) {
     );
 }
 
+const stateColor: Record<string, string> = {
+    waiting_preferences: 'bg-yellow-50 text-yellow-700 ring-yellow-700/10',
+    preferences_partial: 'bg-blue-50 text-blue-700 ring-blue-700/10',
+    preferences_complete: 'bg-green-50 text-green-700 ring-green-700/10',
+};
+
+function GuestPreferences({ booking }: { booking: Booking }) {
+    const prefs = [
+        { label: 'Arrival Time', value: booking.pref_arrival_time },
+        { label: 'Bed Type', value: booking.pref_bed_type },
+        { label: 'Airport Transfer', value: booking.pref_airport_transfer },
+        { label: 'Special Requests', value: booking.pref_special_requests },
+    ];
+
+    const collected = prefs.filter((p) => p.value).length;
+
+    return (
+        <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
+            <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-base font-semibold">Guest Preferences</h2>
+                <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">{collected}/4 collected</span>
+                    <Badge
+                        text={booking.conversation_state.replace('_', ' ')}
+                        color={stateColor[booking.conversation_state] ?? ''}
+                    />
+                </div>
+            </div>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                {prefs.map((p) => (
+                    <Field
+                        key={p.label}
+                        label={p.label}
+                        value={
+                            p.value ? (
+                                <span className="capitalize">{p.value}</span>
+                            ) : (
+                                <span className="italic text-muted-foreground">Not yet collected</span>
+                            )
+                        }
+                    />
+                ))}
+            </div>
+        </div>
+    );
+}
+
 function ConversationLog({ messages }: { messages: WhatsappMessage[] }) {
     if (!messages || messages.length === 0) {
         return (
@@ -226,6 +273,7 @@ export default function BookingDetail({ booking }: Props) {
                 <GuestInfo booking={booking} />
                 <StayDetails booking={booking} />
             </div>
+            <GuestPreferences booking={booking} />
             <ConversationLog messages={booking.whatsapp_messages ?? []} />
             <UpsellHistory logs={booking.upsell_logs ?? []} />
         </div>

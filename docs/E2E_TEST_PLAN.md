@@ -157,6 +157,69 @@ Try these to verify the AI has booking context:
 | "How many nights am I staying?" | References the correct booking dates |
 | "Thank you!" | Polite acknowledgment, offers further help |
 
+---
+
+## Test 3a: Preference Collection Flow
+
+**Goal:** Verify that the concierge collects 4 guest preferences through natural conversation, then sends a staff briefing when complete.
+
+### Steps
+
+1. Complete Test 1 (new booking with welcome message)
+2. The welcome message should ask about arrival time
+3. Reply with: **"I'll arrive around 3pm"**
+4. Wait for AI response — it should acknowledge and ask about bed preference
+5. Reply with: **"Double bed please"**
+6. Wait for AI response — it should ask about airport transfer
+7. Reply with: **"No thanks, we have a car"**
+8. Wait for AI response — it should ask about special requests
+9. Reply with: **"No special requests"**
+10. Wait — the staff WhatsApp number should receive a preparation briefing
+
+### Expected Results
+
+**After each reply:**
+
+| Reply | Preference Extracted | Conversation State |
+|-------|---------------------|-------------------|
+| "I'll arrive around 3pm" | pref_arrival_time = "3pm" or "15:00" | preferences_partial |
+| "Double bed please" | pref_bed_type = "double" | preferences_partial |
+| "No thanks, we have a car" | pref_airport_transfer = "no" | preferences_partial |
+| "No special requests" | pref_special_requests = "none" | preferences_complete |
+
+**After all 4 collected:**
+
+| Check | How to Verify | Expected |
+|-------|--------------|----------|
+| State complete | Backoffice > Bookings > detail | conversation_state = preferences_complete |
+| All preferences | Backoffice > Bookings > detail | All 4 preference fields populated |
+| Staff briefing | Staff WhatsApp number | French briefing with guest preferences (arrival, bed, transfer, special requests) |
+| System logs | Backoffice > System Logs | Multiple preferences_extracted entries + briefing_sent |
+
+### Verify via CLI
+
+```bash
+# Check preference state
+php artisan tinker --execute="\$b = App\Models\Booking::latest()->first(); echo 'State: '.\$b->conversation_state.PHP_EOL.'Arrival: '.\$b->pref_arrival_time.PHP_EOL.'Bed: '.\$b->pref_bed_type.PHP_EOL.'Transfer: '.\$b->pref_airport_transfer.PHP_EOL.'Special: '.\$b->pref_special_requests"
+
+# Check extraction logs
+php artisan tinker --execute="App\Models\SystemLog::where('agent','preference_extractor')->latest()->take(5)->get(['action','status','payload','created_at'])->each(fn(\$l) => print(\$l->action.' | '.\$l->status.' | '.json_encode(\$l->payload).PHP_EOL))"
+```
+
+### Alternative: All Preferences in One Message
+
+Test that the system can extract multiple preferences from a single reply:
+
+1. After welcome, reply: **"We arrive at 4pm, double bed, no airport transfer needed, and my wife is allergic to nuts"**
+2. Verify: all 4 preferences extracted in one go, state = preferences_complete, staff briefing sent
+
+### Pass Criteria
+- Each preference extracted correctly from natural language
+- Conversation state transitions: waiting_preferences -> preferences_partial -> preferences_complete
+- AI asks for next missing preference naturally (not all at once)
+- Staff briefing sent automatically when all 4 collected
+- Works in any language (test with French: "On arrive vers 15h, lit double, pas de transfert, rien de spécial")
+
 ### Verify via CLI
 
 ```bash
@@ -472,18 +535,19 @@ php artisan tinker --execute="App\Models\Booking::factory()->create(['guest_name
 Run tests in this order for a clean flow:
 
 ```
-Test 1  -> Creates booking, verifies welcome
-Test 3  -> Replies to welcome, verifies AI
-Test 2  -> Updates booking, verifies no duplicate welcome
-Test 6  -> Sends upsell (set booking to checked_in first)
-Test 7  -> Accepts upsell
-Test 6  -> Sends another upsell
-Test 8  -> Declines upsell
-Test 9  -> Staff briefing
-Test 4  -> Cancels booking, verifies recovery (30 min wait)
-Test 5  -> Creates + deletes another booking
-Test 10 -> Fallback from unknown number
-Test 11 -> Idempotency check
+Test 1   -> Creates booking, verifies welcome (asks about arrival time)
+Test 3a  -> Collect preferences through multi-turn conversation
+Test 3   -> General AI replies after preferences complete
+Test 2   -> Updates booking, verifies no duplicate welcome
+Test 6   -> Sends upsell (set booking to checked_in first)
+Test 7   -> Accepts upsell
+Test 6   -> Sends another upsell
+Test 8   -> Declines upsell
+Test 9   -> Staff briefing
+Test 4   -> Cancels booking, verifies recovery (30 min wait)
+Test 5   -> Creates + deletes another booking
+Test 10  -> Fallback from unknown number
+Test 11  -> Idempotency check
 ```
 
 ---
@@ -512,6 +576,7 @@ php artisan tinker --execute="App\Models\WebhookLog::latest()->take(3)->get(['so
 | 1 | New Booking -> Welcome Message | |
 | 2 | Booking Update (no duplicate welcome) | |
 | 3 | Guest Reply -> AI Concierge | |
+| 3a | Preference Collection (multi-turn) | |
 | 4 | Booking Cancellation -> Recovery | |
 | 5 | Booking Deletion | |
 | 6 | Upsell Broadcast | |
