@@ -1378,3 +1378,11 @@ Please fill in the "Answer" column and return this document before development b
 | 8 | Should the recovery plan include social media posting suggestions? | If Agent 5 (Content and Ads) is not built, Claude could still suggest the manager manually posts a "last-minute availability" message. Useful or not? |  |
 | 9 | Should cancelled bookings be archived or kept in Active Bookings? | Proposed: keep in Active Bookings with state \= CANCELLED until the freed dates pass, then archive via Scenario 5 (Checkout Archive). This allows the monthly report to track cancellation metrics. |  |
 | 10 | Should the system send a message to the cancelled guest? | The original spec does not include guest communication post-cancellation. Some riads send a "sorry to see you go" message. If desired, this is a small addition. |  |
+
+
+
+---
+
+also feedback : 
+
+- i think we need 
