@@ -85,7 +85,9 @@ php artisan tinker --execute="print_r(App\Models\WhatsappMessage::latest()->firs
 
 ### Pass Criteria
 - Booking exists in database with status=confirmed
-- Guest received WhatsApp welcome message within 60 seconds
+- Guest received WhatsApp welcome message within 60 seconds (asks about arrival time)
+- Booking revenue auto-logged to `transactions` table (type=income, category=accommodation)
+- `revenue_logged` flag set to true on the booking
 - All system logs show status=success
 
 ---
@@ -251,7 +253,10 @@ php artisan tinker --execute="App\Models\WhatsappMessage::latest()->take(2)->get
 | Check | How to Verify | Expected |
 |-------|--------------|----------|
 | Status updated | Backoffice > Bookings | booking_status = cancelled |
+| Conversation state | Backoffice > Bookings > detail | conversation_state = cancelled |
 | Cancellation logged | Backoffice > System Logs | agent=lodgify_sync, action=booking_cancelled |
+| Manager alert sent | Staff WhatsApp number | Alert with guest name, suite, freed dates, booking value |
+| Alert logged | DB: `whatsapp_messages` | agent_source=cancellation_alert, phone=staff number |
 | Recovery scheduled | Backoffice > System Logs | agent=cancellation_recovery, action=recovery_scheduled |
 
 **After 30 minutes (requires queue worker running):**
@@ -400,9 +405,13 @@ php artisan tinker --execute="print_r(App\Models\UpsellLog::latest()->first()?->
 php artisan tinker --execute="print_r(App\Models\Transaction::latest()->first()?->only(['type','category','amount','description']))"
 ```
 
+| Manager notified | Staff WhatsApp number | Alert with guest name, offer title, price |
+| Alert logged | DB: `whatsapp_messages` | agent_source=upsell_recv, phone=staff number |
+
 ### Pass Criteria
 - UpsellLog outcome = accepted
 - Transaction created with correct amount
+- Manager receives instant WhatsApp notification with offer details
 - Booking upsell state cleared (ready for next offer)
 
 ---
@@ -530,24 +539,233 @@ php artisan tinker --execute="App\Models\Booking::factory()->create(['guest_name
 
 ---
 
+## Test 12: Non-Text Message Handling
+
+**Goal:** Verify that images, voice notes, and videos receive a polite text-only request instead of being sent to the AI.
+
+### Steps
+
+1. From the test phone (with active booking), send a **photo** to the concierge WhatsApp
+2. Wait for response
+
+### Expected Results
+
+| Check | How to Verify | Expected |
+|-------|--------------|----------|
+| Polite rejection | Check test phone WhatsApp | "I can only read text messages for now..." |
+| Inbound logged | DB: `whatsapp_messages` | direction=inbound, message_body="[Sent a image]" |
+| System log | Backoffice > System Logs | agent=guest_reply, action=non_text_received |
+| No AI call | System Logs | No guest_reply/reply_sent entry (AI was not invoked) |
+
+### Pass Criteria
+- Guest receives a polite request to use text instead
+- No AI API call wasted on media messages
+
+---
+
+## Test 13: Follow-Up on Silence
+
+**Goal:** Verify that guests who don't reply receive follow-up messages, and escalation happens after 2 unanswered follow-ups.
+
+### Setup
+
+1. Create a booking in Lodgify (guest receives welcome message)
+2. Do NOT reply from the test phone
+3. Wait at least 12 hours (or adjust `SILENCE_HOURS` in FollowUpJob for testing)
+
+### Steps
+
+```bash
+# Manually trigger the follow-up job
+php artisan tinker --execute="dispatch(new App\Jobs\FollowUpJob)"
+php artisan queue:work --queue=agents --once
+```
+
+### Expected Results — First Follow-Up
+
+| Check | How to Verify | Expected |
+|-------|--------------|----------|
+| Follow-up sent | Check test phone WhatsApp | Gentle follow-up asking about arrival time |
+| follow_up_count | DB: `bookings` | follow_up_count = 1 |
+| System log | Backoffice > System Logs | agent=follow_up, action=follow_up_sent, payload={follow_up_number: 1} |
+| State unchanged | DB: `bookings` | conversation_state still waiting_preferences |
+
+### Steps — Second Follow-Up (run job again after 12+ hours of silence)
+
+```bash
+php artisan tinker --execute="dispatch(new App\Jobs\FollowUpJob)"
+php artisan queue:work --queue=agents --once
+```
+
+### Expected Results — Second Follow-Up + Escalation
+
+| Check | How to Verify | Expected |
+|-------|--------------|----------|
+| Follow-up sent | Check test phone WhatsApp | Final follow-up mentioning phone contact |
+| follow_up_count | DB: `bookings` | follow_up_count = 2 |
+| State changed | DB: `bookings` | conversation_state = handover_human |
+| Manager alerted | Staff WhatsApp number | "ESCALATION: Guest not responding" with guest details |
+| Bot silent | Send another message from test phone | No AI reply (bot paused) |
+
+### Pass Criteria
+- 2 follow-ups sent at 12-hour intervals
+- After 2nd: state = handover_human, manager alerted, bot silent
+- Guest reply resets follow_up_count to 0
+
+---
+
+## Test 14: Escalation — Bot Stays Silent
+
+**Goal:** Verify that when a booking is in `handover_human` state, the bot does not reply.
+
+### Setup
+
+Set a booking to handover_human state:
+```bash
+php artisan tinker --execute="App\Models\Booking::latest()->first()?->update(['conversation_state' => 'handover_human'])"
+```
+
+### Steps
+
+1. Send a WhatsApp message from the test phone
+2. Wait 30 seconds
+
+### Expected Results
+
+| Check | How to Verify | Expected |
+|-------|--------------|----------|
+| No reply | Check test phone WhatsApp | No response from the concierge |
+| Inbound logged | DB: `whatsapp_messages` | direction=inbound (message is recorded) |
+| Skipped log | Backoffice > System Logs | agent=guest_reply, action=skipped, reason=state_handover_human |
+
+### Pass Criteria
+- Bot is completely silent
+- Message is still logged for manager to see in the backoffice
+
+---
+
+## Test 15: Checkout Archive
+
+**Goal:** Verify that bookings past their checkout date are automatically marked as checked_out.
+
+### Setup
+
+```bash
+# Create a booking with checkout date yesterday, status checked_in
+php artisan tinker --execute="App\Models\Booking::factory()->create(['booking_status' => 'checked_in', 'check_in' => now()->subDays(3)->toDateString(), 'check_out' => now()->subDay()->toDateString(), 'guest_name' => 'Archive Test'])"
+```
+
+### Steps
+
+```bash
+php artisan tinker --execute="dispatch(new App\Jobs\CheckoutArchiveJob)"
+php artisan queue:work --queue=agents --once
+```
+
+### Expected Results
+
+| Check | How to Verify | Expected |
+|-------|--------------|----------|
+| Status updated | DB: `bookings` | booking_status = checked_out |
+| System log | Backoffice > System Logs | agent=checkout_archive, action=checked_out |
+
+### Pass Criteria
+- Booking marked checked_out automatically
+- Job runs daily at 02:00 AM (Africa/Casablanca) via scheduler
+
+---
+
+## Test 16: Dashboard
+
+**Goal:** Verify the dashboard shows correct operational data.
+
+### Setup
+
+Ensure bookings exist for today:
+- At least one arrival (check_in = today, status = confirmed)
+- At least one departure (check_out = today, status = checked_in)
+
+### Steps
+
+1. Open the backoffice dashboard in a browser
+
+### Expected Results
+
+| Check | What to See | Expected |
+|-------|------------|----------|
+| Stat cards | Top of page | Arrivals, departures, checked-in, and needs-attention counts |
+| Arrivals list | Left panel | Guest names with arrival time, transfer status, preference state |
+| Departures list | Right panel | Guest names with suite |
+| Attention panel | Bottom (if applicable) | Pending preferences count, escalated guests, recent errors |
+
+### Pass Criteria
+- All counts match actual database state
+- Clicking an arrival/departure opens the booking detail page
+
+---
+
+## Test 17: Reports Page
+
+**Goal:** Verify the reports page shows correct financial and performance metrics.
+
+### Setup
+
+Ensure the database has:
+- Bookings with various statuses
+- Transactions (income and expenses)
+- Upsell logs with mixed outcomes
+
+### Steps
+
+1. Open Reports page (`/concierge/report`)
+2. Select "This Month" preset
+3. Verify summary cards
+4. Select "Last Month" — verify data changes
+5. Click "CSV" button — verify download
+
+### Expected Results
+
+| Check | What to See | Expected |
+|-------|------------|----------|
+| Summary cards | Top rows | Total bookings, revenue, expenses, net, occupancy rate |
+| Revenue by suite | Table | Suite names with booking count and total revenue |
+| Revenue by source | Table | Airbnb, Direct, etc. with counts and totals |
+| Upsell performance | Bottom section | Sent, accepted, declined, conversion rate, revenue |
+| CSV export | Downloaded file | All transactions for the selected period |
+| Date presets | Buttons | This Week, This Month, Last Month change the date range |
+| Occupancy rate | Card | Percentage based on booked room-nights / (4 suites × days) |
+
+### Pass Criteria
+- Numbers match actual database records
+- Date range filter works correctly
+- CSV file downloads with correct data
+
+---
+
 ## Test Execution Order
 
 Run tests in this order for a clean flow:
 
 ```
-Test 1   -> Creates booking, verifies welcome (asks about arrival time)
+Test 16  -> Dashboard (verify it loads with data)
+Test 1   -> Creates booking, verifies welcome + revenue logging
 Test 3a  -> Collect preferences through multi-turn conversation
+Test 12  -> Send a photo — verify polite text-only rejection
 Test 3   -> General AI replies after preferences complete
 Test 2   -> Updates booking, verifies no duplicate welcome
 Test 6   -> Sends upsell (set booking to checked_in first)
-Test 7   -> Accepts upsell
+Test 7   -> Accepts upsell (verify manager notification)
 Test 6   -> Sends another upsell
 Test 8   -> Declines upsell
 Test 9   -> Staff briefing
-Test 4   -> Cancels booking, verifies recovery (30 min wait)
+Test 4   -> Cancels booking (verify manager alert + recovery)
 Test 5   -> Creates + deletes another booking
 Test 10  -> Fallback from unknown number
 Test 11  -> Idempotency check
+Test 13  -> Follow-up on silence (trigger manually)
+Test 14  -> Escalation — bot stays silent
+Test 15  -> Checkout archive (trigger manually)
+Test 17  -> Reports page (verify metrics match data)
 ```
 
 ---
@@ -573,15 +791,21 @@ php artisan tinker --execute="App\Models\WebhookLog::latest()->take(3)->get(['so
 
 | # | Test | Status |
 |---|------|--------|
-| 1 | New Booking -> Welcome Message | |
+| 1 | New Booking -> Welcome Message + Revenue Logging | |
 | 2 | Booking Update (no duplicate welcome) | |
 | 3 | Guest Reply -> AI Concierge | |
-| 3a | Preference Collection (multi-turn) | |
-| 4 | Booking Cancellation -> Recovery | |
+| 3a | Preference Collection (multi-turn) + Staff Briefing | |
+| 4 | Booking Cancellation -> Manager Alert + Recovery | |
 | 5 | Booking Deletion | |
 | 6 | Upsell Broadcast | |
-| 7 | Upsell Reply - Accept | |
+| 7 | Upsell Reply - Accept + Manager Notification | |
 | 8 | Upsell Reply - Decline | |
 | 9 | Staff Daily Briefing | |
 | 10 | Fallback Reply (unknown number) | |
 | 11 | Webhook Idempotency | |
+| 12 | Non-Text Message Handling | |
+| 13 | Follow-Up on Silence + Escalation | |
+| 14 | Escalation - Bot Stays Silent | |
+| 15 | Checkout Archive | |
+| 16 | Dashboard | |
+| 17 | Reports Page | |
