@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\WhatsApp;
 
+use App\Ai\Agents\CustomerProfileAgent;
 use App\Ai\Agents\GuestReplyAgent;
 use App\Ai\Agents\PreferenceExtractorAgent;
 use App\Ai\Agents\StaffBriefingAgent;
@@ -163,10 +164,11 @@ class WebhookController extends Controller
                 'duration_ms' => (int) ((microtime(true) - $start) * 1000),
             ]);
 
-            // Send staff briefing once when preferences first complete
+            // Send staff briefing and update customer profile once when preferences first complete
             if ($booking->conversation_state === 'preferences_complete' && !$booking->preferences_briefing_sent) {
                 $booking->update(['preferences_briefing_sent' => true]);
                 $this->sendPreferencesBriefing($booking, $twoChat);
+                $this->regenerateCustomerProfile($booking);
             }
 
             return WebResponse::json(null, 'Reply sent');
@@ -214,6 +216,9 @@ class WebhookController extends Controller
                 $booking->update($updates);
                 $booking->refresh();
 
+                // Sync extracted preferences to customer's compounding profile
+                $this->syncPreferencesToCustomer($booking, $updates);
+
                 SystemLog::create([
                     'agent' => 'preference_extractor',
                     'action' => 'preferences_extracted',
@@ -253,6 +258,63 @@ class WebhookController extends Controller
         } catch (\Throwable $e) {
             Log::warning('Preference extraction failed, continuing with reply', [
                 'booking_id' => $booking->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    protected function syncPreferencesToCustomer(Booking $booking, array $extractedUpdates): void
+    {
+        $customer = $booking->customer;
+
+        if (!$customer) {
+            return;
+        }
+
+        $prefs = $customer->raw_preferences ?? [];
+
+        // Map booking pref columns to customer raw_preferences keys
+        $mapping = [
+            'pref_bed_type' => 'bed_type',
+            'pref_airport_transfer' => 'airport_transfer',
+            'pref_special_requests' => 'special_requests',
+        ];
+
+        foreach ($mapping as $bookingField => $prefKey) {
+            if (isset($extractedUpdates[$bookingField])) {
+                $prefs[$prefKey] = $extractedUpdates[$bookingField];
+            }
+        }
+
+        // Arrival time is per-stay, don't persist to customer profile
+
+        $customer->update(['raw_preferences' => $prefs]);
+    }
+
+    protected function regenerateCustomerProfile(Booking $booking): void
+    {
+        $customer = $booking->customer;
+
+        if (!$customer || empty($customer->raw_preferences)) {
+            return;
+        }
+
+        try {
+            $response = (new CustomerProfileAgent($customer))->prompt(
+                'Generate the profile summary for this guest based on their accumulated preferences.'
+            );
+
+            $customer->update(['profile_summary' => (string) $response]);
+
+            SystemLog::create([
+                'agent' => 'customer_profile',
+                'action' => 'profile_regenerated',
+                'booking_id' => $booking->id,
+                'status' => 'success',
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('Customer profile regeneration failed', [
+                'customer_id' => $customer->id,
                 'error' => $e->getMessage(),
             ]);
         }

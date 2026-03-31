@@ -6,6 +6,7 @@ use App\Ai\Agents\GuestReplyAgent;
 use App\Http\Controllers\Controller;
 use App\Jobs\CancellationRecoveryJob;
 use App\Models\Booking;
+use App\Models\Customer;
 use App\Models\SystemLog;
 use App\Models\Transaction;
 use App\Models\WebhookLog;
@@ -97,11 +98,13 @@ class WebhookController extends Controller
         $existingBooking = Booking::where('lodgify_booking_id', $lodgifyId)->first();
         $lodgifyStatus = $this->mapLodgifyStatus($lodgifyBooking['status'] ?? 'Booked');
 
+        $guestPhone = $guest['phone_number'] ?? '';
+
         $booking = Booking::updateOrCreate(
             ['lodgify_booking_id' => $lodgifyId],
             [
                 'guest_name' => $guest['name'] ?? 'Unknown',
-                'guest_phone' => $guest['phone_number'] ?? '',
+                'guest_phone' => $guestPhone,
                 'guest_email' => $guest['email'] ?? null,
                 'guest_nationality' => $guest['country'] ?? null,
                 'num_guests' => collect($lodgifyBooking['room_types'] ?? [])->sum('people') ?: 1,
@@ -119,11 +122,26 @@ class WebhookController extends Controller
             ],
         );
 
+        // Link or create customer record by phone number
+        if ($guestPhone && $booking->wasRecentlyCreated) {
+            $customer = $this->linkCustomer($booking, $guest);
+
+            // Pre-populate preferences from last stay for returning guests
+            if ($customer->isReturning()) {
+                $this->prepopulatePreferences($booking, $customer);
+            }
+        }
+
         SystemLog::create([
             'agent' => 'lodgify_sync',
             'action' => $booking->wasRecentlyCreated ? 'booking_created' : 'booking_updated',
             'booking_id' => $booking->id,
-            'payload' => ['lodgify_id' => $lodgifyId, 'status' => $booking->booking_status],
+            'payload' => [
+                'lodgify_id' => $lodgifyId,
+                'status' => $booking->booking_status,
+                'customer_id' => $booking->customer_id,
+                'returning_guest' => $booking->customer?->isReturning() ?? false,
+            ],
             'status' => 'success',
             'duration_ms' => (int) ((microtime(true) - $start) * 1000),
         ]);
@@ -339,9 +357,14 @@ class WebhookController extends Controller
 
     protected function sendWelcomeMessage(Booking $booking, TwoChatService $twoChat): void
     {
-        $response = (new GuestReplyAgent($booking))->prompt(
-            'Generate a warm welcome message for this new guest. Introduce yourself as the concierge and let them know you are available on WhatsApp for anything they need during their stay. At the end, ask about their estimated arrival time to help prepare for their welcome. Keep it natural — just ask about arrival time for now, you will collect other preferences in follow-up messages.'
-        );
+        $customer = $booking->customer;
+        $isReturning = $customer && $customer->isReturning();
+
+        $prompt = $isReturning
+            ? "Generate a warm welcome-back message for this returning guest. They have stayed {$customer->total_stays} time(s) before. Acknowledge their return — make them feel recognized and valued. Introduce yourself as the concierge and let them know you are available on WhatsApp. Mention that you remember their preferences from last time and confirm if anything has changed. Ask about their estimated arrival time. Keep it natural and personal."
+            : 'Generate a warm welcome message for this new guest. Introduce yourself as the concierge and let them know you are available on WhatsApp for anything they need during their stay. At the end, ask about their estimated arrival time to help prepare for their welcome. Keep it natural — just ask about arrival time for now, you will collect other preferences in follow-up messages.';
+
+        $response = (new GuestReplyAgent($booking))->prompt($prompt);
 
         $message = (string) $response;
 
@@ -363,6 +386,71 @@ class WebhookController extends Controller
             'booking_id' => $booking->id,
             'status' => 'success',
         ]);
+    }
+
+    protected function linkCustomer(Booking $booking, array $guest): Customer
+    {
+        $customer = Customer::firstOrCreate(
+            ['phone' => $booking->guest_phone],
+            [
+                'name' => $booking->guest_name,
+                'email' => $booking->guest_email,
+                'nationality' => $booking->guest_nationality,
+                'first_stay_at' => $booking->check_in,
+            ],
+        );
+
+        // Update customer details from latest booking (name/email may change across platforms)
+        $customer->update(array_filter([
+            'name' => $booking->guest_name,
+            'email' => $booking->guest_email ?? $customer->email,
+            'nationality' => $booking->guest_nationality ?? $customer->nationality,
+            'last_stay_at' => $booking->check_in,
+        ]));
+
+        $customer->increment('total_stays');
+        $customer->refresh();
+
+        $booking->update(['customer_id' => $customer->id]);
+
+        return $customer;
+    }
+
+    protected function prepopulatePreferences(Booking $booking, Customer $customer): void
+    {
+        $prefs = $customer->raw_preferences ?? [];
+
+        if (empty($prefs)) {
+            return;
+        }
+
+        $updates = [];
+
+        if (isset($prefs['bed_type']) && !$booking->pref_bed_type) {
+            $updates['pref_bed_type'] = $prefs['bed_type'];
+        }
+
+        if (isset($prefs['airport_transfer']) && !$booking->pref_airport_transfer) {
+            $updates['pref_airport_transfer'] = $prefs['airport_transfer'];
+        }
+
+        if (isset($prefs['special_requests']) && $prefs['special_requests'] !== 'none' && !$booking->pref_special_requests) {
+            $updates['pref_special_requests'] = $prefs['special_requests'];
+        }
+
+        // Arrival time is per-stay — do not pre-populate
+
+        if (!empty($updates)) {
+            $booking->update($updates);
+
+            SystemLog::create([
+                'agent' => 'lodgify_sync',
+                'action' => 'preferences_prepopulated',
+                'booking_id' => $booking->id,
+                'status' => 'success',
+                'payload' => $updates,
+            ]);
+        }
     }
 
     protected function mapLodgifyStatus(string $lodgifyStatus): string

@@ -39,9 +39,29 @@ class GuestReplyAgent implements Agent, Conversational
             $this->booking->special_requests ? "- Special Requests: {$this->booking->special_requests}" : null,
         ]));
 
+        $returningGuestContext = $this->returningGuestContext();
         $preferenceInstructions = $this->preferenceInstructions();
 
-        return $systemPrompt . "\n\n" . $guestContext . ($preferenceInstructions ? "\n\n" . $preferenceInstructions : '');
+        return $systemPrompt . "\n\n" . $guestContext
+            . ($returningGuestContext ? "\n\n" . $returningGuestContext : '')
+            . ($preferenceInstructions ? "\n\n" . $preferenceInstructions : '');
+    }
+
+    protected function returningGuestContext(): ?string
+    {
+        $customer = $this->booking->customer;
+
+        if (!$customer || !$customer->isReturning() || !$customer->profile_summary) {
+            return null;
+        }
+
+        return implode("\n", [
+            '## Returning Guest Profile',
+            '',
+            "This guest has stayed {$customer->total_stays} time(s) before. Acknowledge their return warmly.",
+            '',
+            $customer->profile_summary,
+        ]);
     }
 
     protected function preferenceInstructions(): ?string

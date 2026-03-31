@@ -13,6 +13,7 @@ class Booking extends Model
     use HasFactory;
 
     protected $fillable = [
+        'customer_id',
         'lodgify_booking_id',
         'guest_name',
         'guest_phone',
@@ -53,6 +54,11 @@ class Booking extends Model
             'lodgify_synced_at' => 'datetime',
             'upsell_offer_sent_at' => 'datetime',
         ];
+    }
+
+    public function customer(): BelongsTo
+    {
+        return $this->belongsTo(Customer::class);
     }
 
     public function currentOffer(): BelongsTo
