@@ -2,8 +2,10 @@
 
 use App\Ai\Agents\GuestReplyAgent;
 use App\Ai\Agents\PreferenceExtractorAgent;
+use App\Ai\Agents\ServiceRequestDetectorAgent;
 use App\Ai\Agents\UpsellReplyAgent;
 use App\Models\Booking;
+use App\Models\MenuItem;
 use App\Models\Offer;
 use App\Models\SystemLog;
 use App\Models\Transaction;
@@ -13,8 +15,18 @@ use Illuminate\Support\Facades\Http;
 
 beforeEach(function () {
     Http::fake([
-        'api.p.2chat.io/*' => Http::response(['message_uuid' => 'fake-uuid'], 200),
-        'api.p.p.2chat.io/*' => Http::response(['message_uuid' => 'fake-uuid'], 200),
+        'api.p.2chat.io/*' => Http::sequence()
+            ->push(['message_uuid' => 'fake-uuid-1'], 200)
+            ->push(['message_uuid' => 'fake-uuid-2'], 200)
+            ->push(['message_uuid' => 'fake-uuid-3'], 200)
+            ->push(['message_uuid' => 'fake-uuid-4'], 200)
+            ->push(['message_uuid' => 'fake-uuid-5'], 200),
+        'api.p.p.2chat.io/*' => Http::sequence()
+            ->push(['message_uuid' => 'fake-uuid-1'], 200)
+            ->push(['message_uuid' => 'fake-uuid-2'], 200)
+            ->push(['message_uuid' => 'fake-uuid-3'], 200)
+            ->push(['message_uuid' => 'fake-uuid-4'], 200)
+            ->push(['message_uuid' => 'fake-uuid-5'], 200),
     ]);
     // Fake AI agents to avoid real API calls
     GuestReplyAgent::fake(['Hello! Welcome to Riad Larbi Khalis. How can I help you?']);
@@ -328,6 +340,172 @@ test('deduplicates messages by UUID', function () {
     // Second request with same UUID
     $this->postJson('/whatsapp/webhook', $payload, whatsappHeaders());
     expect(WhatsappMessage::where('direction', 'inbound')->count())->toBe(1);
+});
+
+// ─── Fix A: Preference context persists after collection ───
+
+test('GuestReplyAgent includes collected preferences in instructions when preferences_complete', function () {
+    $booking = Booking::factory()->create([
+        'guest_phone' => '+33612345678',
+        'booking_status' => 'confirmed',
+        'conversation_state' => 'preferences_complete',
+        'pref_arrival_time' => 'around 3pm',
+        'pref_bed_type' => 'twin',
+        'pref_airport_transfer' => 'yes',
+        'pref_special_requests' => 'no alcohol, no pork, halal only, flight FL-1000, ETA 1:00 pm',
+    ]);
+
+    $agent = new GuestReplyAgent($booking);
+    $instructions = $agent->instructions();
+
+    expect($instructions)->toContain('DO NOT RE-ASK');
+    expect($instructions)->toContain('around 3pm');
+    expect($instructions)->toContain('twin');
+    expect($instructions)->toContain('yes');
+    expect($instructions)->toContain('flight FL-1000');
+    expect($instructions)->toContain($booking->check_in->format('D, M d, Y'));
+});
+
+test('GuestReplyAgent shows active collection instructions when preferences are partial', function () {
+    $booking = Booking::factory()->create([
+        'guest_phone' => '+33612345678',
+        'booking_status' => 'confirmed',
+        'conversation_state' => 'preferences_partial',
+        'pref_arrival_time' => 'around 3pm',
+        'pref_bed_type' => null,
+        'pref_airport_transfer' => null,
+        'pref_special_requests' => null,
+    ]);
+
+    $agent = new GuestReplyAgent($booking);
+    $instructions = $agent->instructions();
+
+    expect($instructions)->toContain('Preference Collection (ACTIVE)');
+    expect($instructions)->toContain('Already collected: Arrival time: around 3pm');
+    expect($instructions)->toContain('bed preference');
+});
+
+// ─── Fix B: Service request detection and staff notification ───
+
+test('notifies staff when service request is detected', function () {
+    config(['whatsapp.staff_phone_number' => '+212661234567']);
+
+    ServiceRequestDetectorAgent::fake([[
+        'requires_staff_action' => true,
+        'request_summary' => 'Guest wants fresh melon juice',
+        'urgency' => 'normal',
+    ]]);
+
+    $booking = Booking::factory()->create([
+        'guest_phone' => '+33612345678',
+        'booking_status' => 'checked_in',
+        'conversation_state' => 'preferences_complete',
+    ]);
+
+    $this->postJson('/whatsapp/webhook', [
+        'remote_phone_number' => '+33612345678',
+        'sent_by' => 'user',
+        'uuid' => 'MSG-MELON-1',
+        'message' => ['text' => 'I want melon juice'],
+    ], whatsappHeaders());
+
+    // Staff notification sent
+    $staffMessage = WhatsappMessage::where('agent_source', 'service_request')->first();
+    expect($staffMessage)->not->toBeNull();
+    expect($staffMessage->phone_number)->toBe('+212661234567');
+    expect($staffMessage->message_body)->toContain('SERVICE REQUEST');
+    expect($staffMessage->message_body)->toContain('Guest wants fresh melon juice');
+    expect($staffMessage->message_body)->toContain('I want melon juice');
+
+    // System log created
+    $log = SystemLog::where('agent', 'service_request')->first();
+    expect($log)->not->toBeNull();
+    expect($log->action)->toBe('staff_notified');
+    expect($log->payload['summary'])->toBe('Guest wants fresh melon juice');
+});
+
+test('does not notify staff when no service request detected', function () {
+    config(['whatsapp.staff_phone_number' => '+212661234567']);
+
+    ServiceRequestDetectorAgent::fake([[
+        'requires_staff_action' => false,
+        'request_summary' => null,
+        'urgency' => 'normal',
+    ]]);
+
+    Booking::factory()->create([
+        'guest_phone' => '+33612345678',
+        'booking_status' => 'checked_in',
+        'conversation_state' => 'preferences_complete',
+    ]);
+
+    $this->postJson('/whatsapp/webhook', [
+        'remote_phone_number' => '+33612345678',
+        'sent_by' => 'user',
+        'uuid' => 'MSG-WIFI-1',
+        'message' => ['text' => 'What is the wifi password?'],
+    ], whatsappHeaders());
+
+    expect(WhatsappMessage::where('agent_source', 'service_request')->count())->toBe(0);
+    expect(SystemLog::where('agent', 'service_request')->count())->toBe(0);
+});
+
+test('urgent service request includes URGENT label in staff notification', function () {
+    config(['whatsapp.staff_phone_number' => '+212661234567']);
+
+    ServiceRequestDetectorAgent::fake([[
+        'requires_staff_action' => true,
+        'request_summary' => 'AC not working in guest room',
+        'urgency' => 'urgent',
+    ]]);
+
+    Booking::factory()->create([
+        'guest_phone' => '+33612345678',
+        'booking_status' => 'checked_in',
+        'conversation_state' => 'preferences_complete',
+    ]);
+
+    $this->postJson('/whatsapp/webhook', [
+        'remote_phone_number' => '+33612345678',
+        'sent_by' => 'user',
+        'uuid' => 'MSG-AC-1',
+        'message' => ['text' => 'The AC is broken, it is very hot'],
+    ], whatsappHeaders());
+
+    $staffMessage = WhatsappMessage::where('agent_source', 'service_request')->first();
+    expect($staffMessage->message_body)->toContain('URGENT SERVICE REQUEST');
+});
+
+// ─── Fix C: Menu items in AI context ───
+
+test('GuestReplyAgent includes available menu items in instructions', function () {
+    MenuItem::factory()->create(['name' => 'Moroccan Mint Tea', 'category' => 'drinks', 'price' => null, 'is_available' => true]);
+    MenuItem::factory()->create(['name' => 'Fresh Melon Juice', 'category' => 'drinks', 'price' => 45.00, 'is_available' => true]);
+    MenuItem::factory()->create(['name' => 'Expired Item', 'category' => 'drinks', 'price' => 30.00, 'is_available' => false]);
+
+    $booking = Booking::factory()->create([
+        'conversation_state' => 'preferences_complete',
+    ]);
+
+    $agent = new GuestReplyAgent($booking);
+    $instructions = $agent->instructions();
+
+    expect($instructions)->toContain('Available Menu & Drinks');
+    expect($instructions)->toContain('Moroccan Mint Tea');
+    expect($instructions)->toContain('Fresh Melon Juice');
+    expect($instructions)->toContain('45.00 MAD');
+    expect($instructions)->not->toContain('Expired Item');
+});
+
+test('GuestReplyAgent excludes menu section when no items exist', function () {
+    $booking = Booking::factory()->create([
+        'conversation_state' => 'preferences_complete',
+    ]);
+
+    $agent = new GuestReplyAgent($booking);
+    $instructions = $agent->instructions();
+
+    expect($instructions)->not->toContain('Available Menu & Drinks');
 });
 
 /**

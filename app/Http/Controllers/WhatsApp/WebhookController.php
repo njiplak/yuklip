@@ -5,6 +5,7 @@ namespace App\Http\Controllers\WhatsApp;
 use App\Ai\Agents\CustomerProfileAgent;
 use App\Ai\Agents\GuestReplyAgent;
 use App\Ai\Agents\PreferenceExtractorAgent;
+use App\Ai\Agents\ServiceRequestDetectorAgent;
 use App\Ai\Agents\StaffBriefingAgent;
 use App\Ai\Agents\UpsellReplyAgent;
 use App\Http\Controllers\Controller;
@@ -163,6 +164,9 @@ class WebhookController extends Controller
                 'status' => 'success',
                 'duration_ms' => (int) ((microtime(true) - $start) * 1000),
             ]);
+
+            // Detect service requests and notify staff if action is needed
+            $this->detectAndNotifyServiceRequest($booking, $text, $reply, $twoChat);
 
             // Send staff briefing and update customer profile once when preferences first complete
             if ($booking->conversation_state === 'preferences_complete' && !$booking->preferences_briefing_sent) {
@@ -367,6 +371,71 @@ class WebhookController extends Controller
             ]);
         } catch (\Throwable $e) {
             Log::error('Preferences briefing failed', [
+                'booking_id' => $booking->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    protected function detectAndNotifyServiceRequest(
+        Booking $booking,
+        string $guestMessage,
+        string $botReply,
+        TwoChatService $twoChat,
+    ): void {
+        try {
+            $result = (new ServiceRequestDetectorAgent($booking))->prompt($guestMessage);
+            $detection = $result->toArray();
+
+            if (empty($detection['requires_staff_action'])) {
+                return;
+            }
+
+            $staffNumber = config('whatsapp.staff_phone_number');
+
+            if (!$staffNumber) {
+                return;
+            }
+
+            $urgencyLabel = ($detection['urgency'] ?? 'normal') === 'urgent' ? 'URGENT ' : '';
+
+            $alert = implode("\n", [
+                "{$urgencyLabel}SERVICE REQUEST",
+                '',
+                "Guest: {$booking->guest_name}",
+                "Suite: {$booking->suite_name}",
+                "Request: {$detection['request_summary']}",
+                '',
+                "Guest said: \"{$guestMessage}\"",
+                "Bot replied: \"{$botReply}\"",
+                '',
+                'Please follow up with the guest.',
+            ]);
+
+            $result = $twoChat->sendMessage($staffNumber, $alert);
+
+            WhatsappMessage::create([
+                'direction' => 'outbound',
+                'phone_number' => $staffNumber,
+                'message_body' => $alert,
+                'agent_source' => 'service_request',
+                'booking_id' => $booking->id,
+                'twochat_message_id' => $result['message_uuid'] ?? null,
+                'sent_at' => now(),
+            ]);
+
+            SystemLog::create([
+                'agent' => 'service_request',
+                'action' => 'staff_notified',
+                'booking_id' => $booking->id,
+                'status' => 'success',
+                'payload' => [
+                    'summary' => $detection['request_summary'],
+                    'urgency' => $detection['urgency'] ?? 'normal',
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('Service request detection failed', [
                 'booking_id' => $booking->id,
                 'error' => $e->getMessage(),
             ]);

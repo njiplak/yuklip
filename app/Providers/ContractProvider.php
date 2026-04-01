@@ -6,6 +6,7 @@ use App\Contract\Auth\UserAuthContract;
 use App\Contract\AuthContract;
 use App\Contract\BaseContract;
 use App\Contract\Concierge\BookingContract;
+use App\Contract\Concierge\MenuItemContract;
 use App\Contract\Concierge\OfferContract;
 use App\Contract\Concierge\SystemLogContract;
 use App\Contract\Concierge\TransactionContract;
@@ -19,6 +20,7 @@ use App\Service\Auth\UserAuthService;
 use App\Service\AuthService;
 use App\Service\BaseService;
 use App\Service\Concierge\BookingService;
+use App\Service\Concierge\MenuItemService;
 use App\Service\Concierge\OfferService;
 use App\Service\Concierge\SystemLogService;
 use App\Service\Concierge\TransactionService;
@@ -45,6 +47,7 @@ class ContractProvider extends ServiceProvider
 
         // Concierge
         BookingContract::class => BookingService::class,
+        MenuItemContract::class => MenuItemService::class,
         OfferContract::class => OfferService::class,
         UpsellLogContract::class => UpsellLogService::class,
         TransactionContract::class => TransactionService::class,

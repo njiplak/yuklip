@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Concierge\BookingController;
+use App\Http\Controllers\Concierge\MenuItemController;
 use App\Http\Controllers\Concierge\OfferController;
 use App\Http\Controllers\Concierge\ReportController;
 use App\Http\Controllers\Concierge\SystemLogController;
@@ -32,6 +33,17 @@ Route::group(['middleware' => 'auth', 'prefix' => 'concierge', 'as' => 'backoffi
         Route::put('/{id}', [OfferController::class, 'update'])->name('update');
         Route::delete('/{id}', [OfferController::class, 'destroy'])->name('destroy');
         Route::post('/destroy-bulk', [OfferController::class, 'destroy_bulk'])->name('destroy-bulk');
+    });
+
+    Route::group(['prefix' => 'menu-item', 'as' => 'menu-item.'], function () {
+        Route::get('/', [MenuItemController::class, 'index'])->name('index');
+        Route::get('/fetch', [MenuItemController::class, 'fetch'])->name('fetch');
+        Route::get('/create', [MenuItemController::class, 'create'])->name('create');
+        Route::post('/', [MenuItemController::class, 'store'])->name('store');
+        Route::get('/{id}', [MenuItemController::class, 'show'])->name('show');
+        Route::put('/{id}', [MenuItemController::class, 'update'])->name('update');
+        Route::delete('/{id}', [MenuItemController::class, 'destroy'])->name('destroy');
+        Route::post('/destroy-bulk', [MenuItemController::class, 'destroy_bulk'])->name('destroy-bulk');
     });
 
     Route::group(['prefix' => 'upsell-log', 'as' => 'upsell-log.'], function () {
