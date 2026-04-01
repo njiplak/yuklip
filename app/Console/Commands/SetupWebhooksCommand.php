@@ -61,13 +61,20 @@ class SetupWebhooksCommand extends Command
             }
         }
 
-        if ($secret) {
+        $configuredSecret = config('lodgify.webhook_secret');
+
+        if ($secret && $secret !== $configuredSecret) {
             $this->newLine();
-            $this->warn('  IMPORTANT: Lodgify returned a webhook secret.');
-            $this->warn('  Save it as LODGIFY_WEBHOOK_SECRET in your .env:');
+            $this->warn('  ⚠ Lodgify returned a NEW webhook secret that differs from your .env!');
+            $this->warn('  Update LODGIFY_WEBHOOK_SECRET in your .env:');
             $this->newLine();
             $this->line("  LODGIFY_WEBHOOK_SECRET={$secret}");
             $this->newLine();
+        }
+
+        if ($configuredSecret && !$secret) {
+            $this->newLine();
+            $this->line("  LODGIFY_WEBHOOK_SECRET={$configuredSecret}");
         }
 
         // --- 2Chat webhook ---
