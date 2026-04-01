@@ -53,6 +53,11 @@ return [
         'anthropic' => [
             'driver' => 'anthropic',
             'key' => env('ANTHROPIC_API_KEY'),
+            'models' => [
+                'text' => [
+                    'default' => 'claude-opus-4-6',
+                ],
+            ],
         ],
 
         'azure' => [

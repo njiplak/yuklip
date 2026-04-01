@@ -43,7 +43,7 @@ return [
     'openrouter' => [
         'base_url' => env('OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1'),
         'api_key' => env('OPENROUTER_API_KEY'),
-        'text_model' => env('OPENROUTER_TEXT_MODEL', 'anthropic/claude-sonnet-4-5'),
+        'text_model' => env('OPENROUTER_TEXT_MODEL', 'anthropic/claude-opus-4-6'),
         'image_model' => env('OPENROUTER_IMAGE_MODEL', 'sourceful/riverflow-v2-fast'),
     ],
 
