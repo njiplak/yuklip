@@ -19,6 +19,7 @@ class Booking extends Model
         'guest_phone',
         'guest_email',
         'guest_nationality',
+        'detected_language',
         'num_guests',
         'suite_name',
         'check_in',

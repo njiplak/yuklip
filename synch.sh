@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-APP_DIR="/var/www/html/yuklip"
-QUEUE_SERVICE="kawakib-queue-worker"
+APP_DIR="/var/www/html/hedi"
+QUEUE_SERVICE="hedi-queue-worker"
 
 # Function to display an error message and exit
 error_exit() {
@@ -154,6 +154,12 @@ if [[ $# -eq 1 ]]; then
 else
   echo "No migration option provided. Skipping migrations..."
 fi
+
+# Ensure storage symlink exists (needed for monthly report Excel downloads)
+php artisan storage:link 2>/dev/null || true
+
+# Optimize Laravel (config, routes, views cache)
+php artisan optimize
 
 # Ensure Laravel scheduler cron is installed (under www-data)
 ensure_scheduler_cron() {

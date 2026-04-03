@@ -19,6 +19,7 @@ class WhatsappMessage extends Model
         'twochat_message_id',
         'sent_at',
         'received_at',
+        'pending_send_at',
     ];
 
     protected function casts(): array
@@ -26,6 +27,7 @@ class WhatsappMessage extends Model
         return [
             'sent_at' => 'datetime',
             'received_at' => 'datetime',
+            'pending_send_at' => 'datetime',
         ];
     }
 

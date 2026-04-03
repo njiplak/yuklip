@@ -27,31 +27,52 @@ class CancellationRecoveryJob implements ShouldQueue
     {
         $booking = Booking::find($this->bookingId);
 
-        if (!$booking || $booking->booking_status !== 'cancelled' || !$booking->guest_phone) {
+        if (!$booking || $booking->booking_status !== 'cancelled') {
+            return;
+        }
+
+        $staffPhone = config('whatsapp.staff_phone_number');
+        $ownerPhone = config('whatsapp.owner_phone_number');
+
+        $recipients = array_unique(array_filter([$staffPhone, $ownerPhone]));
+
+        if (empty($recipients)) {
             return;
         }
 
         $start = microtime(true);
 
         try {
-            $response = (new CancellationRecoveryAgent($booking))->prompt('Generate the recovery message.');
-            $message = (string) $response;
+            $response = (new CancellationRecoveryAgent($booking))->prompt('Generate the recovery action plan.');
+            $plan = (string) $response;
 
-            $result = $twoChat->sendMessage($booking->guest_phone, $message);
-
-            WhatsappMessage::create([
-                'booking_id' => $booking->id,
-                'direction' => 'outbound',
-                'phone_number' => $booking->guest_phone,
-                'message_body' => $message,
-                'agent_source' => 'cancellation_recovery',
-                'twochat_message_id' => $result['message_uuid'] ?? null,
-                'sent_at' => now(),
+            $header = implode("\n", [
+                "RECOVERY PLAN",
+                "Cancelled: {$booking->guest_name} | {$booking->suite_name}",
+                "Dates: {$booking->check_in->format('d M')} - {$booking->check_out->format('d M')}",
+                "Lost: {$booking->total_amount} {$booking->currency}",
+                "",
             ]);
+
+            $message = $header . $plan;
+
+            foreach ($recipients as $phone) {
+                $result = $twoChat->sendMessage($phone, $message);
+
+                WhatsappMessage::create([
+                    'booking_id' => $booking->id,
+                    'direction' => 'outbound',
+                    'phone_number' => $phone,
+                    'message_body' => $message,
+                    'agent_source' => 'cancellation_recovery',
+                    'twochat_message_id' => $result['message_uuid'] ?? null,
+                    'sent_at' => now(),
+                ]);
+            }
 
             SystemLog::create([
                 'agent' => 'cancellation_recovery',
-                'action' => 'recovery_sent',
+                'action' => 'recovery_plan_sent',
                 'booking_id' => $booking->id,
                 'status' => 'success',
                 'duration_ms' => (int) ((microtime(true) - $start) * 1000),
@@ -61,7 +82,7 @@ class CancellationRecoveryJob implements ShouldQueue
 
             SystemLog::create([
                 'agent' => 'cancellation_recovery',
-                'action' => 'recovery_sent',
+                'action' => 'recovery_plan_sent',
                 'booking_id' => $booking->id,
                 'status' => 'failed',
                 'error_message' => $e->getMessage(),

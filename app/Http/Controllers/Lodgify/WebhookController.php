@@ -12,6 +12,7 @@ use App\Models\Transaction;
 use App\Models\WebhookLog;
 use App\Models\WhatsappMessage;
 use App\Service\WhatsApp\TwoChatService;
+use App\Utils\PhoneFormatter;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -98,7 +99,11 @@ class WebhookController extends Controller
         $existingBooking = Booking::where('lodgify_booking_id', $lodgifyId)->first();
         $lodgifyStatus = $this->mapLodgifyStatus($lodgifyBooking['status'] ?? 'Booked');
 
-        $guestPhone = $guest['phone_number'] ?? '';
+        $rawPhone = $guest['phone_number'] ?? '';
+        $guestPhone = PhoneFormatter::toE164($rawPhone) ?? $rawPhone;
+
+        $numGuests = collect($lodgifyBooking['room_types'] ?? [])->sum('people') ?: 1;
+        $suiteName = $lodgifyBooking['room_types'][0]['name'] ?? $lodgifyBooking['property_name'] ?? '';
 
         $booking = Booking::updateOrCreate(
             ['lodgify_booking_id' => $lodgifyId],
@@ -107,8 +112,8 @@ class WebhookController extends Controller
                 'guest_phone' => $guestPhone,
                 'guest_email' => $guest['email'] ?? null,
                 'guest_nationality' => $guest['country'] ?? null,
-                'num_guests' => collect($lodgifyBooking['room_types'] ?? [])->sum('people') ?: 1,
-                'suite_name' => $lodgifyBooking['room_types'][0]['name'] ?? $lodgifyBooking['property_name'] ?? 'Unknown',
+                'num_guests' => $numGuests,
+                'suite_name' => $suiteName ?: 'Unknown',
                 'check_in' => $checkIn,
                 'check_out' => $checkOut,
                 'num_nights' => $nights,
@@ -118,9 +123,15 @@ class WebhookController extends Controller
                     : $lodgifyStatus,
                 'total_amount' => $totalAmount ?: 0,
                 'currency' => $currency ?: 'MAD',
+                'detected_language' => $this->detectLanguage($guest['country'] ?? null),
                 'lodgify_synced_at' => now(),
             ],
         );
+
+        // Set conversation state for edge cases (only on new bookings)
+        if ($booking->wasRecentlyCreated) {
+            $this->applyInitialConversationState($booking, $guestPhone, $numGuests, $suiteName, $checkIn, $twoChat);
+        }
 
         // Link or create customer record by phone number
         if ($guestPhone && $booking->wasRecentlyCreated) {
@@ -161,8 +172,9 @@ class WebhookController extends Controller
             $booking->update(['revenue_logged' => true]);
         }
 
-        // Send welcome message for new confirmed bookings
-        if ($booking->wasRecentlyCreated && $booking->booking_status === 'confirmed' && $booking->guest_phone) {
+        // Send welcome message for new confirmed bookings (skip edge-case states that need manual handling first)
+        $skipWelcomeStates = ['phone_missing', 'group_booking', 'suite_pending'];
+        if ($booking->wasRecentlyCreated && $booking->booking_status === 'confirmed' && $booking->guest_phone && !in_array($booking->conversation_state, $skipWelcomeStates)) {
             try {
                 $this->sendWelcomeMessage($booking, $twoChat);
             } catch (\Throwable $e) {
@@ -260,10 +272,25 @@ class WebhookController extends Controller
             'status' => 'success',
         ]);
 
-        // Alert manager/owner immediately
+        // Alert manager AND owner immediately
         $this->sendCancellationAlert($booking, $twoChat);
+        $this->sendCancellationAlertToOwner($booking, $twoChat);
 
-        // Only send recovery if guest has a phone number and not already scheduled
+        // Log revenue loss as a negative transaction
+        if ($booking->total_amount > 0) {
+            Transaction::create([
+                'booking_id' => $booking->id,
+                'type' => 'expense',
+                'category' => 'cancellation_loss',
+                'description' => "Revenue loss: cancelled booking {$booking->guest_name} ({$booking->suite_name})",
+                'amount' => $booking->total_amount,
+                'currency' => $booking->currency,
+                'transaction_date' => now()->toDateString(),
+                'recorded_by' => 'system',
+            ]);
+        }
+
+        // Only send recovery plan if guest has a phone number and not already scheduled
         if ($booking->guest_phone) {
             $alreadyScheduled = SystemLog::where('booking_id', $booking->id)
                 ->where('agent', 'cancellation_recovery')
@@ -349,6 +376,54 @@ class WebhookController extends Controller
             ]);
         } catch (\Throwable $e) {
             Log::error('Cancellation alert failed', [
+                'booking_id' => $booking->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    protected function sendCancellationAlertToOwner(Booking $booking, TwoChatService $twoChat): void
+    {
+        $ownerPhone = config('whatsapp.owner_phone_number');
+
+        if (!$ownerPhone) {
+            return;
+        }
+
+        // Don't duplicate if owner and staff are the same number
+        if ($ownerPhone === config('whatsapp.staff_phone_number')) {
+            return;
+        }
+
+        $daysUntilCheckIn = now()->diffInDays($booking->check_in, false);
+        $urgency = $daysUntilCheckIn <= 3 ? 'URGENT — ' : '';
+
+        $alert = implode("\n", [
+            "{$urgency}BOOKING CANCELLED",
+            "",
+            "Guest: {$booking->guest_name}",
+            "Suite: {$booking->suite_name}",
+            "Dates: {$booking->check_in->format('d M')} - {$booking->check_out->format('d M')} ({$booking->num_nights} nights)",
+            "Value: {$booking->total_amount} {$booking->currency}",
+            "Source: {$booking->booking_source}",
+            $daysUntilCheckIn > 0 ? "Days until check-in: {$daysUntilCheckIn}" : "Check-in date has passed",
+            "",
+            "A recovery plan will be sent shortly.",
+        ]);
+
+        try {
+            $twoChat->sendMessage($ownerPhone, $alert);
+
+            WhatsappMessage::create([
+                'direction' => 'outbound',
+                'phone_number' => $ownerPhone,
+                'message_body' => $alert,
+                'agent_source' => 'cancellation_alert',
+                'booking_id' => $booking->id,
+                'sent_at' => now(),
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Owner cancellation alert failed', [
                 'booking_id' => $booking->id,
                 'error' => $e->getMessage(),
             ]);
@@ -453,6 +528,47 @@ class WebhookController extends Controller
         }
     }
 
+    /**
+     * Detect likely guest language from country code.
+     * SPEC: "Detect guest language from booking country data."
+     */
+    protected function detectLanguage(?string $country): ?string
+    {
+        if (!$country) {
+            return null;
+        }
+
+        $country = strtoupper(trim($country));
+
+        $map = [
+            // French-speaking
+            'FR' => 'fr', 'BE' => 'fr', 'CH' => 'fr', 'CA' => 'fr', 'LU' => 'fr',
+            'SN' => 'fr', 'CI' => 'fr', 'ML' => 'fr', 'BF' => 'fr', 'NE' => 'fr',
+            'TG' => 'fr', 'BJ' => 'fr', 'CM' => 'fr', 'CD' => 'fr', 'GA' => 'fr',
+            'MG' => 'fr', 'HT' => 'fr', 'MC' => 'fr',
+            // Arabic-speaking
+            'MA' => 'ar', 'DZ' => 'ar', 'TN' => 'ar', 'EG' => 'ar', 'SA' => 'ar',
+            'AE' => 'ar', 'QA' => 'ar', 'KW' => 'ar', 'BH' => 'ar', 'OM' => 'ar',
+            'JO' => 'ar', 'LB' => 'ar', 'IQ' => 'ar', 'LY' => 'ar', 'SD' => 'ar',
+            // Spanish
+            'ES' => 'es', 'MX' => 'es', 'AR' => 'es', 'CO' => 'es', 'CL' => 'es',
+            'PE' => 'es', 'VE' => 'es', 'EC' => 'es', 'CU' => 'es',
+            // German
+            'DE' => 'de', 'AT' => 'de',
+            // Italian
+            'IT' => 'it',
+            // Portuguese
+            'PT' => 'pt', 'BR' => 'pt',
+            // Dutch
+            'NL' => 'nl',
+            // English (default for anglophone countries)
+            'US' => 'en', 'GB' => 'en', 'AU' => 'en', 'NZ' => 'en', 'IE' => 'en',
+            'ZA' => 'en', 'NG' => 'en', 'GH' => 'en', 'KE' => 'en',
+        ];
+
+        return $map[$country] ?? 'en';
+    }
+
     protected function mapLodgifyStatus(string $lodgifyStatus): string
     {
         return match (strtolower($lodgifyStatus)) {
@@ -529,5 +645,188 @@ class WebhookController extends Controller
     {
         Log::warning('Lodgify unknown action', ['action' => $request->input('action')]);
         return response()->json(['status' => 'ok']);
+    }
+
+    /**
+     * Set initial conversation state based on booking edge cases.
+     * SPEC: handle phone_missing, group_booking, suite_pending, last-minute arrivals.
+     */
+    protected function applyInitialConversationState(
+        Booking $booking,
+        string $guestPhone,
+        int $numGuests,
+        string $suiteName,
+        string $checkIn,
+        TwoChatService $twoChat,
+    ): void {
+        $staffNumber = config('whatsapp.staff_phone_number');
+
+        // Phone missing — can't contact guest
+        if (!PhoneFormatter::isValid($guestPhone)) {
+            $booking->update(['conversation_state' => 'phone_missing']);
+
+            if ($staffNumber) {
+                $alert = implode("\n", [
+                    "PHONE MISSING",
+                    "",
+                    "Guest: {$booking->guest_name}",
+                    "Suite: {$booking->suite_name}",
+                    "Check-in: {$booking->check_in->format('d M Y')}",
+                    "",
+                    "No valid phone number for this booking. Please obtain the guest's WhatsApp number and update it in the system.",
+                ]);
+
+                try {
+                    $twoChat->sendMessage($staffNumber, $alert);
+                    WhatsappMessage::create([
+                        'direction' => 'outbound',
+                        'phone_number' => $staffNumber,
+                        'message_body' => $alert,
+                        'agent_source' => 'lodgify_sync',
+                        'booking_id' => $booking->id,
+                        'sent_at' => now(),
+                    ]);
+                } catch (\Throwable $e) {
+                    Log::error('Phone missing alert failed', ['booking_id' => $booking->id, 'error' => $e->getMessage()]);
+                }
+            }
+
+            SystemLog::create([
+                'agent' => 'lodgify_sync',
+                'action' => 'phone_missing',
+                'booking_id' => $booking->id,
+                'status' => 'success',
+            ]);
+
+            return;
+        }
+
+        // Group booking (> 2 guests) — needs manual handling
+        if ($numGuests > 2) {
+            $booking->update(['conversation_state' => 'group_booking']);
+
+            if ($staffNumber) {
+                $alert = implode("\n", [
+                    "GROUP BOOKING",
+                    "",
+                    "Guest: {$booking->guest_name}",
+                    "Suite: {$booking->suite_name}",
+                    "Guests: {$numGuests}",
+                    "Check-in: {$booking->check_in->format('d M Y')}",
+                    "Phone: {$booking->guest_phone}",
+                    "",
+                    "This is a group booking ({$numGuests} guests). Please review and confirm suite assignments before the welcome message is sent.",
+                    "",
+                    "Reply DONE-{$booking->id} when ready to resume automation.",
+                ]);
+
+                try {
+                    $twoChat->sendMessage($staffNumber, $alert);
+                    WhatsappMessage::create([
+                        'direction' => 'outbound',
+                        'phone_number' => $staffNumber,
+                        'message_body' => $alert,
+                        'agent_source' => 'lodgify_sync',
+                        'booking_id' => $booking->id,
+                        'sent_at' => now(),
+                    ]);
+                } catch (\Throwable $e) {
+                    Log::error('Group booking alert failed', ['booking_id' => $booking->id, 'error' => $e->getMessage()]);
+                }
+            }
+
+            SystemLog::create([
+                'agent' => 'lodgify_sync',
+                'action' => 'group_booking_detected',
+                'booking_id' => $booking->id,
+                'status' => 'success',
+                'payload' => ['num_guests' => $numGuests],
+            ]);
+
+            return;
+        }
+
+        // Suite not assigned
+        if (empty($suiteName) || $suiteName === 'Unknown') {
+            $booking->update(['conversation_state' => 'suite_pending']);
+
+            if ($staffNumber) {
+                $alert = implode("\n", [
+                    "SUITE NOT ASSIGNED",
+                    "",
+                    "Guest: {$booking->guest_name}",
+                    "Check-in: {$booking->check_in->format('d M Y')}",
+                    "Phone: {$booking->guest_phone}",
+                    "",
+                    "This booking has no suite assigned in Lodgify. Please assign a suite and the welcome message will be sent automatically.",
+                    "",
+                    "Reply DONE-{$booking->id} when ready to resume automation.",
+                ]);
+
+                try {
+                    $twoChat->sendMessage($staffNumber, $alert);
+                    WhatsappMessage::create([
+                        'direction' => 'outbound',
+                        'phone_number' => $staffNumber,
+                        'message_body' => $alert,
+                        'agent_source' => 'lodgify_sync',
+                        'booking_id' => $booking->id,
+                        'sent_at' => now(),
+                    ]);
+                } catch (\Throwable $e) {
+                    Log::error('Suite pending alert failed', ['booking_id' => $booking->id, 'error' => $e->getMessage()]);
+                }
+            }
+
+            SystemLog::create([
+                'agent' => 'lodgify_sync',
+                'action' => 'suite_pending',
+                'booking_id' => $booking->id,
+                'status' => 'success',
+            ]);
+
+            return;
+        }
+
+        // Last-minute arrival (check-in within 24 hours)
+        $hoursUntilCheckIn = now()->diffInHours(Carbon::parse($checkIn), false);
+        if ($hoursUntilCheckIn >= 0 && $hoursUntilCheckIn < 24) {
+            if ($staffNumber) {
+                $alert = implode("\n", [
+                    "LAST-MINUTE BOOKING",
+                    "",
+                    "Guest: {$booking->guest_name}",
+                    "Suite: {$booking->suite_name}",
+                    "Check-in: {$booking->check_in->format('d M Y')} (within 24 hours)",
+                    "Phone: {$booking->guest_phone}",
+                    "",
+                    "This is a last-minute booking. Welcome message is being sent now. Please prepare the suite immediately.",
+                ]);
+
+                try {
+                    $twoChat->sendMessage($staffNumber, $alert);
+                    WhatsappMessage::create([
+                        'direction' => 'outbound',
+                        'phone_number' => $staffNumber,
+                        'message_body' => $alert,
+                        'agent_source' => 'lodgify_sync',
+                        'booking_id' => $booking->id,
+                        'sent_at' => now(),
+                    ]);
+                } catch (\Throwable $e) {
+                    Log::error('Last-minute alert failed', ['booking_id' => $booking->id, 'error' => $e->getMessage()]);
+                }
+            }
+
+            SystemLog::create([
+                'agent' => 'lodgify_sync',
+                'action' => 'last_minute_booking',
+                'booking_id' => $booking->id,
+                'status' => 'success',
+                'payload' => ['hours_until_checkin' => $hoursUntilCheckIn],
+            ]);
+
+            // Don't return — still send the welcome message for last-minute bookings
+        }
     }
 }

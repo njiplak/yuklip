@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\WhatsApp;
 
 use App\Ai\Agents\CustomerProfileAgent;
+use App\Ai\Agents\ExpenseParserAgent;
 use App\Ai\Agents\GuestReplyAgent;
 use App\Ai\Agents\PreferenceExtractorAgent;
 use App\Ai\Agents\ServiceRequestDetectorAgent;
@@ -15,6 +16,7 @@ use App\Models\Transaction;
 use App\Models\UpsellLog;
 use App\Models\WebhookLog;
 use App\Models\WhatsappMessage;
+use App\Service\WhatsApp\NighttimeQueue;
 use App\Service\WhatsApp\TwoChatService;
 use App\Utils\WebResponse;
 use Illuminate\Http\JsonResponse;
@@ -99,12 +101,49 @@ class WebhookController extends Controller
         }
         RateLimiter::hit($rateLimitKey, 60);
 
+        // Manager commands: DONE handler and expense input
+        $staffPhone = config('whatsapp.staff_phone_number');
+        if ($staffPhone && $phone === $staffPhone) {
+            // DONE-{bookingId} to resume automation
+            if (preg_match('/^DONE[- ](\d+)$/i', trim($text), $matches)) {
+                return $this->handleDoneCommand((int) $matches[1], $twoChat);
+            }
+
+            // Expense input (starts with "expense" or "dépense" or looks like an expense)
+            if (preg_match('/^(expense|dépense|depense|paid|payé)\b/i', trim($text))) {
+                return $this->handleExpenseInput($text, $phone, $twoChat);
+            }
+
+            // Cancel last expense within 5-minute window
+            if (strtoupper(trim($text)) === 'NO') {
+                $pendingCancel = cache()->pull("expense_cancel:{$phone}");
+                if ($pendingCancel) {
+                    $transaction = Transaction::find($pendingCancel);
+                    if ($transaction) {
+                        $transaction->delete();
+                        try {
+                            $twoChat->sendMessage($phone, "Expense cancelled and removed.");
+                        } catch (\Throwable) {}
+
+                        SystemLog::create([
+                            'agent' => 'expense_input',
+                            'action' => 'expense_cancelled',
+                            'status' => 'success',
+                            'payload' => ['transaction_id' => $pendingCancel],
+                        ]);
+
+                        return WebResponse::json(null, 'Expense cancelled');
+                    }
+                }
+            }
+        }
+
         if (!$booking) {
             return $this->sendFallbackReply($phone, $twoChat);
         }
 
-        // Bot stays silent when guest is in manager handover or cancelled state
-        if (in_array($booking->conversation_state, ['handover_human', 'cancelled'])) {
+        // Bot stays silent when guest is in paused/escalated states
+        if (in_array($booking->conversation_state, ['handover_human', 'issue_detected', 'cancelled', 'phone_missing', 'group_booking', 'suite_pending'])) {
             SystemLog::create([
                 'agent' => 'guest_reply',
                 'action' => 'skipped',
@@ -140,28 +179,32 @@ class WebhookController extends Controller
             // Extract preferences if still collecting
             if ($booking->conversation_state !== 'preferences_complete') {
                 $this->extractPreferences($booking, $text);
+                $booking->refresh();
+
+                // If sentiment detection escalated to issue_detected or handover_human, bot stays silent
+                if (in_array($booking->conversation_state, ['issue_detected', 'handover_human'])) {
+                    SystemLog::create([
+                        'agent' => 'guest_reply',
+                        'action' => 'skipped',
+                        'booking_id' => $booking->id,
+                        'status' => 'skipped',
+                        'payload' => ['reason' => 'sentiment_escalated_to_' . $booking->conversation_state],
+                    ]);
+                    return WebResponse::json(null, 'Escalated — bot silent');
+                }
             }
 
             $response = (new GuestReplyAgent($booking))->prompt($text);
             $reply = (string) $response;
 
-            $result = $twoChat->sendMessage($booking->guest_phone, $reply);
-
-            WhatsappMessage::create([
-                'booking_id' => $booking->id,
-                'direction' => 'outbound',
-                'phone_number' => $booking->guest_phone,
-                'message_body' => $reply,
-                'agent_source' => 'guest_reply',
-                'twochat_message_id' => $result['message_uuid'] ?? null,
-                'sent_at' => now(),
-            ]);
+            NighttimeQueue::sendOrQueue($twoChat, $booking->guest_phone, $reply, $booking->id, 'guest_reply');
 
             SystemLog::create([
                 'agent' => 'guest_reply',
                 'action' => 'reply_sent',
                 'booking_id' => $booking->id,
                 'status' => 'success',
+                'payload' => NighttimeQueue::isNighttime() ? ['queued' => true] : null,
                 'duration_ms' => (int) ((microtime(true) - $start) * 1000),
             ]);
 
@@ -216,12 +259,20 @@ class WebhookController extends Controller
                 $updates['pref_special_requests'] = $extracted['special_requests'];
             }
 
+            // Update detected language if available
+            if (!empty($extracted['detected_language'])) {
+                $updates['detected_language'] = $extracted['detected_language'];
+            }
+
             if (!empty($updates)) {
                 $booking->update($updates);
                 $booking->refresh();
 
                 // Sync extracted preferences to customer's compounding profile
-                $this->syncPreferencesToCustomer($booking, $updates);
+                $prefUpdates = array_diff_key($updates, ['detected_language' => true]);
+                if (!empty($prefUpdates)) {
+                    $this->syncPreferencesToCustomer($booking, $prefUpdates);
+                }
 
                 SystemLog::create([
                     'agent' => 'preference_extractor',
@@ -230,6 +281,27 @@ class WebhookController extends Controller
                     'status' => 'success',
                     'payload' => $updates,
                 ]);
+            }
+
+            // Handle sentiment: issue_detected or handover_human
+            $sentiment = $extracted['sentiment'] ?? 'normal';
+
+            if ($sentiment === 'issue_detected' || $sentiment === 'handover_human') {
+                $booking->update(['conversation_state' => $sentiment]);
+                $booking->refresh();
+
+                // Alert manager about the issue
+                $this->alertManagerEscalation($booking, $sentiment, $text);
+
+                SystemLog::create([
+                    'agent' => 'preference_extractor',
+                    'action' => 'sentiment_escalated',
+                    'booking_id' => $booking->id,
+                    'status' => 'success',
+                    'payload' => ['sentiment' => $sentiment],
+                ]);
+
+                return;
             }
 
             // Update conversation state based on what's collected
@@ -264,6 +336,54 @@ class WebhookController extends Controller
                 'booking_id' => $booking->id,
                 'error' => $e->getMessage(),
             ]);
+        }
+    }
+
+    /**
+     * Alert manager when guest sentiment triggers escalation.
+     * SPEC: issue_detected (angry/frustrated) or handover_human (uninterpretable).
+     */
+    protected function alertManagerEscalation(Booking $booking, string $sentiment, string $guestMessage): void
+    {
+        $staffPhone = config('whatsapp.staff_phone_number');
+
+        if (!$staffPhone) {
+            return;
+        }
+
+        $label = $sentiment === 'issue_detected' ? 'ISSUE DETECTED' : 'ESCALATION — UNINTERPRETABLE';
+        $instruction = $sentiment === 'issue_detected'
+            ? 'Guest appears frustrated or upset. Please contact them directly. Automated messaging is paused.'
+            : 'Could not interpret the guest\'s message. Please contact them directly. Automated messaging is paused.';
+
+        $alert = implode("\n", [
+            $label,
+            "",
+            "Guest: {$booking->guest_name}",
+            "Suite: {$booking->suite_name}",
+            "Phone: {$booking->guest_phone}",
+            "",
+            "Guest said: \"{$guestMessage}\"",
+            "",
+            $instruction,
+            "",
+            "Reply DONE-{$booking->id} when ready to resume automation.",
+        ]);
+
+        try {
+            $twoChat = app(TwoChatService::class);
+            $twoChat->sendMessage($staffPhone, $alert);
+
+            WhatsappMessage::create([
+                'direction' => 'outbound',
+                'phone_number' => $staffPhone,
+                'message_body' => $alert,
+                'agent_source' => 'escalation',
+                'booking_id' => $booking->id,
+                'sent_at' => now(),
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Escalation alert failed', ['booking_id' => $booking->id, 'error' => $e->getMessage()]);
         }
     }
 
@@ -347,7 +467,7 @@ class WebhookController extends Controller
             ]];
 
             $response = (new StaffBriefingAgent($arrivals, []))->prompt(
-                'Generate a guest preparation briefing. All preferences have been collected from this guest via WhatsApp. Include all preference details so staff can prepare the suite and any transfers.'
+                'Generate a guest preparation briefing in both French and Arabic. All preferences have been collected from this guest via WhatsApp. Include all preference details so staff can prepare the suite and any transfers.'
             );
 
             $briefing = (string) $response;
@@ -667,6 +787,196 @@ class WebhookController extends Controller
         return $booking->current_upsell_offer_id !== null
             && $booking->upsell_offer_sent_at !== null
             && $booking->upsell_offer_sent_at->diffInHours(now()) < 48;
+    }
+
+    /**
+     * DONE handler: manager sends "DONE-{bookingId}" to resume automation.
+     * Resets conversation_state from handover/paused states to preferences_partial.
+     */
+    protected function handleDoneCommand(int $bookingId, TwoChatService $twoChat): JsonResponse
+    {
+        $staffPhone = config('whatsapp.staff_phone_number');
+        $booking = Booking::find($bookingId);
+
+        if (!$booking) {
+            if ($staffPhone) {
+                try {
+                    $twoChat->sendMessage($staffPhone, "Booking #{$bookingId} not found. Please check the ID.");
+                } catch (\Throwable $e) {
+                    Log::error('DONE error reply failed', ['error' => $e->getMessage()]);
+                }
+            }
+            return WebResponse::json(null, 'Booking not found');
+        }
+
+        $pausedStates = ['handover_human', 'issue_detected', 'group_booking', 'suite_pending'];
+
+        if (!in_array($booking->conversation_state, $pausedStates)) {
+            if ($staffPhone) {
+                try {
+                    $twoChat->sendMessage($staffPhone, "Booking #{$bookingId} ({$booking->guest_name}) is in state '{$booking->conversation_state}' — not in a paused state. No action taken.");
+                } catch (\Throwable $e) {
+                    Log::error('DONE error reply failed', ['error' => $e->getMessage()]);
+                }
+            }
+            return WebResponse::json(null, 'Not in paused state');
+        }
+
+        $previousState = $booking->conversation_state;
+        $booking->update([
+            'conversation_state' => 'waiting_preferences',
+            'follow_up_count' => 0,
+        ]);
+
+        SystemLog::create([
+            'agent' => 'done_handler',
+            'action' => 'automation_resumed',
+            'booking_id' => $booking->id,
+            'status' => 'success',
+            'payload' => ['previous_state' => $previousState],
+        ]);
+
+        if ($staffPhone) {
+            $confirmation = implode("\n", [
+                "Automation resumed for booking #{$bookingId}",
+                "Guest: {$booking->guest_name}",
+                "Suite: {$booking->suite_name}",
+                "Previous state: {$previousState}",
+                "New state: waiting_preferences",
+            ]);
+
+            try {
+                $twoChat->sendMessage($staffPhone, $confirmation);
+                WhatsappMessage::create([
+                    'direction' => 'outbound',
+                    'phone_number' => $staffPhone,
+                    'message_body' => $confirmation,
+                    'agent_source' => 'done_handler',
+                    'booking_id' => $booking->id,
+                    'sent_at' => now(),
+                ]);
+            } catch (\Throwable $e) {
+                Log::error('DONE confirmation failed', ['error' => $e->getMessage()]);
+            }
+        }
+
+        // Send welcome message now that the booking is unblocked (if not already sent)
+        $welcomeAlreadySent = WhatsappMessage::where('booking_id', $booking->id)
+            ->where('direction', 'outbound')
+            ->where('agent_source', 'lodgify_sync')
+            ->exists();
+
+        if (!$welcomeAlreadySent && $booking->guest_phone && $booking->booking_status === 'confirmed') {
+            try {
+                $response = (new GuestReplyAgent($booking))->prompt(
+                    'Generate a warm welcome message for this guest. Introduce yourself as the concierge and let them know you are available on WhatsApp. Ask about their estimated arrival time.'
+                );
+                $message = (string) $response;
+
+                $result = NighttimeQueue::sendOrQueue($twoChat, $booking->guest_phone, $message, $booking->id, 'done_handler');
+
+                SystemLog::create([
+                    'agent' => 'done_handler',
+                    'action' => 'welcome_sent',
+                    'booking_id' => $booking->id,
+                    'status' => 'success',
+                ]);
+            } catch (\Throwable $e) {
+                Log::error('DONE welcome message failed', ['booking_id' => $booking->id, 'error' => $e->getMessage()]);
+            }
+        }
+
+        return WebResponse::json(null, 'DONE processed');
+    }
+
+    /**
+     * Expense input: manager sends "expense [amount] [category] [description]" via WhatsApp.
+     * Uses Claude to parse flexible formats. Logs to Transaction. Sends confirmation.
+     */
+    protected function handleExpenseInput(string $text, string $phone, TwoChatService $twoChat): JsonResponse
+    {
+        $start = microtime(true);
+
+        try {
+            $result = (new ExpenseParserAgent())->prompt($text);
+            $parsed = $result->toArray();
+
+            if (empty($parsed['amount']) || $parsed['amount'] <= 0) {
+                $twoChat->sendMessage($phone, "Could not parse expense amount. Format: expense [amount] [category] [description]\n\nExample: expense 1200 food weekly market supplies");
+                return WebResponse::json(null, 'Expense parse failed');
+            }
+
+            $transaction = Transaction::create([
+                'type' => 'expense',
+                'category' => $parsed['category'] ?? 'other',
+                'description' => $parsed['description'] ?? $text,
+                'amount' => $parsed['amount'],
+                'currency' => 'MAD',
+                'transaction_date' => now()->toDateString(),
+                'recorded_by' => 'manager',
+            ]);
+
+            $categoryInferred = !empty($parsed['category_inferred']) && $parsed['category_inferred'];
+
+            $confirmation = implode("\n", [
+                "Expense logged:",
+                "  Amount: {$parsed['amount']} MAD",
+                "  Category: {$parsed['category']}",
+                "  Description: {$parsed['description']}",
+                "",
+                $categoryInferred
+                    ? "Category was inferred. Is this correct? Reply NO to cancel within 5 minutes."
+                    : "Logged successfully.",
+            ]);
+
+            $sendResult = $twoChat->sendMessage($phone, $confirmation);
+
+            WhatsappMessage::create([
+                'direction' => 'outbound',
+                'phone_number' => $phone,
+                'message_body' => $confirmation,
+                'agent_source' => 'expense_input',
+                'twochat_message_id' => $sendResult['message_uuid'] ?? null,
+                'sent_at' => now(),
+            ]);
+
+            // Store transaction ID in cache for 5-minute cancellation window
+            if ($categoryInferred) {
+                cache()->put("expense_cancel:{$phone}", $transaction->id, now()->addMinutes(5));
+            }
+
+            SystemLog::create([
+                'agent' => 'expense_input',
+                'action' => 'expense_logged',
+                'status' => 'success',
+                'payload' => [
+                    'amount' => $parsed['amount'],
+                    'category' => $parsed['category'],
+                    'transaction_id' => $transaction->id,
+                ],
+                'duration_ms' => (int) ((microtime(true) - $start) * 1000),
+            ]);
+
+            return WebResponse::json(null, 'Expense logged');
+        } catch (\Throwable $e) {
+            Log::error('Expense input failed', ['error' => $e->getMessage()]);
+
+            try {
+                $twoChat->sendMessage($phone, "Failed to process expense. Please try again.\n\nFormat: expense [amount] [category] [description]");
+            } catch (\Throwable) {
+                // Silently fail — original error is already logged
+            }
+
+            SystemLog::create([
+                'agent' => 'expense_input',
+                'action' => 'expense_logged',
+                'status' => 'failed',
+                'error_message' => $e->getMessage(),
+                'duration_ms' => (int) ((microtime(true) - $start) * 1000),
+            ]);
+
+            return WebResponse::json(null, 'Expense failed');
+        }
     }
 
     protected function extractMessageText(Request $request): ?string

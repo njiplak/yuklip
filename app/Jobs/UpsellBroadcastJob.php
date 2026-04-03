@@ -8,6 +8,7 @@ use App\Models\Offer;
 use App\Models\SystemLog;
 use App\Models\UpsellLog;
 use App\Models\WhatsappMessage;
+use App\Service\WhatsApp\NighttimeQueue;
 use App\Service\WhatsApp\TwoChatService;
 use Carbon\Carbon;
 use Illuminate\Bus\Queueable;
@@ -26,9 +27,23 @@ class UpsellBroadcastJob implements ShouldQueue
         $this->onQueue('agents');
     }
 
+    /** Conversation states where upsell messages must NOT be sent. */
+    private const SKIP_STATES = [
+        'handover_human',
+        'issue_detected',
+        'cancelled',
+        'checked_out',
+        'phone_missing',
+        'group_booking',
+        'suite_pending',
+    ];
+
     public function handle(TwoChatService $twoChat): void
     {
-        $bookings = Booking::where('booking_status', 'checked_in')->get();
+        $bookings = Booking::where('booking_status', 'checked_in')
+            ->where('conversation_state', 'preferences_complete')
+            ->whereNotIn('conversation_state', self::SKIP_STATES)
+            ->get();
 
         foreach ($bookings as $booking) {
             $this->processBooking($booking, $twoChat);
@@ -38,6 +53,11 @@ class UpsellBroadcastJob implements ShouldQueue
     protected function processBooking(Booking $booking, TwoChatService $twoChat): void
     {
         if (!$booking->guest_phone) {
+            return;
+        }
+
+        // Double-check state — belt and suspenders
+        if (in_array($booking->conversation_state, self::SKIP_STATES)) {
             return;
         }
 
@@ -77,9 +97,9 @@ class UpsellBroadcastJob implements ShouldQueue
             $response = (new UpsellBroadcastAgent($booking, $offer))->prompt('Generate the upsell message.');
             $message = (string) $response;
 
-            $result = $twoChat->sendMessage($booking->guest_phone, $message);
+            NighttimeQueue::sendOrQueue($twoChat, $booking->guest_phone, $message, $booking->id, 'upsell_cron');
 
-            // Only update state after message is confirmed sent
+            // Only update state after message is sent or queued
             $booking->update([
                 'current_upsell_offer_id' => $offer->id,
                 'upsell_offer_sent_at' => now(),
@@ -91,16 +111,6 @@ class UpsellBroadcastJob implements ShouldQueue
                 'message_sent' => $message,
                 'sent_at' => now(),
                 'outcome' => 'pending',
-            ]);
-
-            WhatsappMessage::create([
-                'booking_id' => $booking->id,
-                'direction' => 'outbound',
-                'phone_number' => $booking->guest_phone,
-                'message_body' => $message,
-                'agent_source' => 'upsell_cron',
-                'twochat_message_id' => $result['message_uuid'] ?? null,
-                'sent_at' => now(),
             ]);
 
             SystemLog::create([

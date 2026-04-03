@@ -6,6 +6,7 @@ use App\Ai\Agents\GuestReplyAgent;
 use App\Models\Booking;
 use App\Models\SystemLog;
 use App\Models\WhatsappMessage;
+use App\Service\WhatsApp\NighttimeQueue;
 use App\Service\WhatsApp\TwoChatService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -79,17 +80,7 @@ class FollowUpJob implements ShouldQueue
             $response = (new GuestReplyAgent($booking))->prompt($prompt);
             $message = (string) $response;
 
-            $result = $twoChat->sendMessage($booking->guest_phone, $message);
-
-            WhatsappMessage::create([
-                'booking_id' => $booking->id,
-                'direction' => 'outbound',
-                'phone_number' => $booking->guest_phone,
-                'message_body' => $message,
-                'agent_source' => 'follow_up',
-                'twochat_message_id' => $result['message_uuid'] ?? null,
-                'sent_at' => now(),
-            ]);
+            NighttimeQueue::sendOrQueue($twoChat, $booking->guest_phone, $message, $booking->id, 'follow_up');
 
             $booking->update(['follow_up_count' => $followUpNumber]);
 

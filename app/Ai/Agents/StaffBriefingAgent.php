@@ -37,7 +37,11 @@ class StaffBriefingAgent implements Agent
         return implode("\n", [
             'Generate a concise daily staff briefing for Riad Larbi Khalis.',
             'Format it clearly for WhatsApp (use emojis sparingly for readability).',
-            'Language: French (staff language).',
+            '',
+            'IMPORTANT: The briefing MUST be bilingual — write each section first in French, then in Arabic (Darija/Standard Arabic).',
+            'Use this format:',
+            '  🇫🇷 [French section]',
+            '  🇲🇦 [Arabic section]',
             '',
             '## Arrivals Today',
             $arrivalsText,
@@ -45,6 +49,7 @@ class StaffBriefingAgent implements Agent
             '## Departures Today',
             $departuresText,
             '',
+            'Include all guest preferences, special requests, and transfer details.',
             'Output ONLY the briefing message. No preamble.',
         ]);
     }

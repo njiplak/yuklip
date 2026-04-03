@@ -81,6 +81,12 @@ class PreferenceExtractorAgent implements Agent, HasStructuredOutput
             '- Return null for any preference not mentioned in this message.',
             '- Do not overwrite already-collected preferences — only return values for missing ones.',
             '- The guest may reply in any language. Extract the preference regardless of language.',
+            '',
+            '## Sentiment Detection',
+            '- If the guest is angry, frustrated, or complaining, set sentiment to "issue_detected".',
+            '- If the message is gibberish, a single emoji, or completely uninterpretable, set sentiment to "handover_human".',
+            '- Otherwise, set sentiment to "normal".',
+            '- Also detect the language the guest is writing in and return it as detected_language (ISO 639-1 code: en, fr, ar, es, de, etc.).',
         ]);
     }
 
@@ -91,6 +97,8 @@ class PreferenceExtractorAgent implements Agent, HasStructuredOutput
             'bed_type' => $schema->string()->enum(['double', 'twin'])->nullable(),
             'airport_transfer' => $schema->string()->enum(['yes', 'no'])->nullable(),
             'special_requests' => $schema->string()->nullable(),
+            'sentiment' => $schema->string()->enum(['normal', 'issue_detected', 'handover_human']),
+            'detected_language' => $schema->string()->nullable(),
         ];
     }
 }
