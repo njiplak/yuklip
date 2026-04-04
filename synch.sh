@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-APP_DIR="/var/www/html/hedi"
-QUEUE_SERVICE="hedi-queue-worker"
+APP_DIR="/var/www/html/yuklip"
+QUEUE_SERVICE="yuklip-queue-worker"
 
 # Function to display an error message and exit
 error_exit() {
@@ -115,10 +115,6 @@ check_command systemctl
 
 cd "$APP_DIR" || error_exit "Failed to change to $APP_DIR"
 
-# Store current lock file hashes to detect changes after sync
-OLD_COMPOSER_HASH=$(md5sum composer.lock 2>/dev/null || echo "none")
-OLD_BUN_HASH=$(md5sum bun.lockb 2>/dev/null || echo "none")
-
 # Sync local code to match origin/main
 echo "Fetching latest from origin..."
 git fetch origin
@@ -126,23 +122,12 @@ git fetch origin
 echo "Resetting to origin/main..."
 git reset --hard origin/main
 
-# Reinstall dependencies only if lock files changed
-NEW_COMPOSER_HASH=$(md5sum composer.lock 2>/dev/null || echo "none")
-NEW_BUN_HASH=$(md5sum bun.lockb 2>/dev/null || echo "none")
+# Install dependencies
+echo "Installing Composer dependencies..."
+composer install --prefer-dist --no-interaction
 
-if [[ "$OLD_COMPOSER_HASH" != "$NEW_COMPOSER_HASH" ]]; then
-  echo "composer.lock changed. Installing Composer dependencies..."
-  composer install --prefer-dist --no-interaction
-else
-  echo "composer.lock unchanged. Skipping composer install."
-fi
-
-if [[ "$OLD_BUN_HASH" != "$NEW_BUN_HASH" ]]; then
-  echo "bun.lockb changed. Running bun install..."
-  bun install
-else
-  echo "bun.lockb unchanged. Skipping bun install."
-fi
+echo "Installing Bun dependencies..."
+bun install
 
 # Build
 echo "Running 'bun run build'..."
