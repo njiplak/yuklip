@@ -14,13 +14,13 @@ class PushNotificationService
      */
     public static function broadcast(string $title, string $body, ?string $url = null, ?string $tag = null): void
     {
-        $users = User::whereHas('pushSubscriptions')->get();
-
-        if ($users->isEmpty()) {
-            return;
-        }
-
         try {
+            $users = User::whereHas('pushSubscriptions')->get();
+
+            if ($users->isEmpty()) {
+                return;
+            }
+
             Notification::send($users, new ManagerPushNotification($title, $body, $url, $tag));
         } catch (\Throwable $e) {
             Log::error('Push notification failed', [
