@@ -35,13 +35,19 @@ self.addEventListener('push', (event) => {
     const data = event.data.json();
 
     event.waitUntil(
-        self.registration.showNotification(data.title, {
-            body: data.body,
+        self.registration.showNotification(data.title || 'Yasmine', {
+            body: data.body || '',
             icon: data.icon || '/pwa-icon-192.png',
-            badge: data.badge || '/pwa-icon-192.png',
+            badge: data.badge || '/pwa-badge-96.png',
             tag: data.tag || 'yasmine',
             renotify: true,
+            requireInteraction: true,
+            silent: false,
+            vibrate: [200, 100, 200],
             data: data.data || {},
+            actions: data.data?.url
+                ? [{ action: 'open', title: 'Open' }]
+                : [],
         }),
     );
 });
@@ -54,7 +60,7 @@ self.addEventListener('notificationclick', (event) => {
     event.waitUntil(
         clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
             for (const client of windowClients) {
-                if (client.url.includes(url) && 'focus' in client) {
+                if (new URL(client.url).pathname === url && 'focus' in client) {
                     return client.focus();
                 }
             }
