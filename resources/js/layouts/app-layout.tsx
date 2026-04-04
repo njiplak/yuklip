@@ -13,6 +13,7 @@ import {
     Settings,
 } from 'lucide-react';
 import AppLogo from '@/components/app-logo';
+import { PushNotificationPrompt } from '@/components/push-notification-prompt';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import {
     DropdownMenu,
@@ -263,6 +264,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
                     {children}
                 </div>
             </SidebarInset>
+            <PushNotificationPrompt />
         </SidebarProvider>
     );
 }

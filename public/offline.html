@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Offline — Yasmine.ai</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: Inter, system-ui, -apple-system, sans-serif;
+            background: #061E28;
+            color: #F4EEE4;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100dvh;
+            padding: 2rem;
+        }
+        .container {
+            text-align: center;
+            max-width: 400px;
+        }
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 0.75rem;
+        }
+        p {
+            font-size: 1rem;
+            opacity: 0.7;
+            line-height: 1.5;
+        }
+        button {
+            margin-top: 1.5rem;
+            padding: 0.625rem 1.5rem;
+            background: #F4EEE4;
+            color: #061E28;
+            border: none;
+            border-radius: 0.5rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>You're offline</h1>
+        <p>Yasmine.ai needs an internet connection to work. Please check your connection and try again.</p>
+        <button onclick="location.reload()">Retry</button>
+    </div>
+</body>
+</html>

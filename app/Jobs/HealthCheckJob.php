@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\Booking;
 use App\Models\SystemLog;
 use App\Models\WhatsappMessage;
+use App\Service\PushNotificationService;
 use App\Service\WhatsApp\TwoChatService;
 use Carbon\Carbon;
 use Illuminate\Bus\Queueable;
@@ -135,6 +136,8 @@ class HealthCheckJob implements ShouldQueue
             [""],
             $issues,
         ));
+
+        PushNotificationService::healthAlert(count($issues) . ' issue(s) detected — check system logs');
 
         try {
             $result = $twoChat->sendMessage($staffPhone, $message);

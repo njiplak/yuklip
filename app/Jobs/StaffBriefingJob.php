@@ -6,6 +6,7 @@ use App\Ai\Agents\StaffBriefingAgent;
 use App\Models\Booking;
 use App\Models\SystemLog;
 use App\Models\WhatsappMessage;
+use App\Service\PushNotificationService;
 use App\Service\WhatsApp\TwoChatService;
 use Carbon\Carbon;
 use Illuminate\Bus\Queueable;
@@ -80,6 +81,8 @@ class StaffBriefingJob implements ShouldQueue
         try {
             $response = (new StaffBriefingAgent($arrivals, $departures))->prompt('Generate the daily briefing.');
             $briefing = (string) $response;
+
+            PushNotificationService::dailyBriefing(count($arrivals), count($departures));
 
             $result = $twoChat->sendMessage($staffNumber, $briefing);
 

@@ -16,6 +16,7 @@ use App\Models\Transaction;
 use App\Models\UpsellLog;
 use App\Models\WebhookLog;
 use App\Models\WhatsappMessage;
+use App\Service\PushNotificationService;
 use App\Service\WhatsApp\NighttimeQueue;
 use App\Service\WhatsApp\TwoChatService;
 use App\Utils\WebResponse;
@@ -351,6 +352,9 @@ class WebhookController extends Controller
             return;
         }
 
+        $reason = $sentiment === 'issue_detected' ? 'Guest appears frustrated' : 'Could not interpret message';
+        PushNotificationService::escalation($booking->guest_name, $booking->suite_name, $reason);
+
         $label = $sentiment === 'issue_detected' ? 'ISSUE DETECTED' : 'ESCALATION — UNINTERPRETABLE';
         $instruction = $sentiment === 'issue_detected'
             ? 'Guest appears frustrated or upset. Please contact them directly. Automated messaging is paused.'
@@ -510,6 +514,12 @@ class WebhookController extends Controller
             if (empty($detection['requires_staff_action'])) {
                 return;
             }
+
+            PushNotificationService::serviceRequest(
+                $booking->guest_name,
+                $booking->suite_name,
+                $detection['request_summary'] ?? 'Service request',
+            );
 
             $staffNumber = config('whatsapp.staff_phone_number');
 
@@ -766,6 +776,12 @@ class WebhookController extends Controller
 
     protected function notifyManagerUpsellAccepted(Booking $booking, \App\Models\Offer $offer, TwoChatService $twoChat, ?string $details = null): void
     {
+        PushNotificationService::upsellAccepted(
+            $booking->guest_name,
+            $offer->title,
+            "{$offer->price} {$offer->currency}",
+        );
+
         $staffNumber = config('whatsapp.staff_phone_number');
 
         if (!$staffNumber) {
@@ -820,6 +836,12 @@ class WebhookController extends Controller
         string $guestReply,
         TwoChatService $twoChat,
     ): void {
+        PushNotificationService::customRequest(
+            $booking->guest_name,
+            $booking->suite_name,
+            $customRequest ?? $guestReply,
+        );
+
         $staffNumber = config('whatsapp.staff_phone_number');
 
         if (!$staffNumber) {

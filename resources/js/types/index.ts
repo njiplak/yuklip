@@ -8,5 +8,6 @@ export type SharedData = {
     name: string;
     auth: Auth;
     sidebarOpen: boolean;
+    vapidPublicKey: string;
     [key: string]: unknown;
 };

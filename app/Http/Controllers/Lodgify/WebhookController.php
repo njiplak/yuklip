@@ -11,6 +11,7 @@ use App\Models\SystemLog;
 use App\Models\Transaction;
 use App\Models\WebhookLog;
 use App\Models\WhatsappMessage;
+use App\Service\PushNotificationService;
 use App\Service\WhatsApp\TwoChatService;
 use App\Utils\PhoneFormatter;
 use Carbon\Carbon;
@@ -130,6 +131,11 @@ class WebhookController extends Controller
 
         // Set conversation state for edge cases (only on new bookings)
         if ($booking->wasRecentlyCreated) {
+            PushNotificationService::newBooking(
+                $booking->guest_name,
+                $booking->suite_name,
+                "{$checkIn} → {$checkOut}",
+            );
             $this->applyInitialConversationState($booking, $guestPhone, $numGuests, $suiteName, $checkIn, $twoChat);
         }
 

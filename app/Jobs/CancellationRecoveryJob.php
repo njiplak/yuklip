@@ -6,6 +6,7 @@ use App\Ai\Agents\CancellationRecoveryAgent;
 use App\Models\Booking;
 use App\Models\SystemLog;
 use App\Models\WhatsappMessage;
+use App\Service\PushNotificationService;
 use App\Service\WhatsApp\TwoChatService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -33,6 +34,8 @@ class CancellationRecoveryJob implements ShouldQueue
 
         $staffPhone = config('whatsapp.staff_phone_number');
         $ownerPhone = config('whatsapp.owner_phone_number');
+
+        PushNotificationService::cancellation($booking->guest_name, $booking->suite_name);
 
         $recipients = array_unique(array_filter([$staffPhone, $ownerPhone]));
 
