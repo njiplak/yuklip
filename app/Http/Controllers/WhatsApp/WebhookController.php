@@ -585,29 +585,42 @@ class WebhookController extends Controller
 
             $classification = $response['classification'];
             $replyMessage = $response['reply_message'];
+            $details = $response['details'] ?? null;
+            $alternativeOfferCode = $response['alternative_offer_code'] ?? null;
+            $customRequest = $response['custom_request'] ?? null;
 
+            // Update upsell log with reply
             $upsellLog = UpsellLog::where('booking_id', $booking->id)
                 ->where('offer_id', $offer->id)
                 ->whereNull('guest_reply')
                 ->latest()
                 ->first();
 
+            $logOutcome = match ($classification) {
+                'accepted', 'accept_and_more' => 'accepted',
+                'declined' => 'declined',
+                'different_request' => 'custom_request',
+                'unrelated' => 'no_response',
+                default => 'pending', // question — offer still active
+            };
+
             if ($upsellLog) {
                 $upsellLog->update([
                     'guest_reply' => $guestReply,
                     'reply_received_at' => now(),
-                    'outcome' => $classification,
-                    'revenue_generated' => $classification === 'accepted' ? $offer->price : null,
+                    'outcome' => $logOutcome,
+                    'revenue_generated' => in_array($classification, ['accepted', 'accept_and_more']) ? $offer->price : null,
                 ]);
             }
 
-            if ($classification === 'accepted') {
+            // Handle accepted / accept_and_more — log revenue, notify manager
+            if (in_array($classification, ['accepted', 'accept_and_more'])) {
                 if ($offer->price) {
                     Transaction::create([
                         'booking_id' => $booking->id,
                         'type' => 'income',
                         'category' => 'upsell',
-                        'description' => "Upsell: {$offer->title}",
+                        'description' => "Upsell: {$offer->title}" . ($details ? " ({$details})" : ''),
                         'amount' => $offer->price,
                         'currency' => $offer->currency,
                         'transaction_date' => now()->toDateString(),
@@ -615,33 +628,40 @@ class WebhookController extends Controller
                     ]);
                 }
 
-                $this->notifyManagerUpsellAccepted($booking, $offer, $twoChat);
+                $this->notifyManagerUpsellAccepted($booking, $offer, $twoChat, $details);
             }
 
-            if (in_array($classification, ['accepted', 'declined'])) {
+            // Handle accept_and_more — also notify manager about the additional request
+            if ($classification === 'accept_and_more' && ($customRequest || $alternativeOfferCode)) {
+                $this->notifyManagerCustomRequest($booking, $customRequest, $alternativeOfferCode, $guestReply, $twoChat);
+            }
+
+            // Handle different_request — notify manager about custom/alternative request
+            if ($classification === 'different_request') {
+                $this->notifyManagerCustomRequest($booking, $customRequest, $alternativeOfferCode, $guestReply, $twoChat);
+            }
+
+            // Clear active offer for terminal classifications (not question — offer stays active)
+            if ($classification !== 'question') {
                 $booking->update([
                     'current_upsell_offer_id' => null,
                     'upsell_offer_sent_at' => null,
                 ]);
             }
 
-            $result = $twoChat->sendMessage($booking->guest_phone, $replyMessage);
-
-            WhatsappMessage::create([
-                'booking_id' => $booking->id,
-                'direction' => 'outbound',
-                'phone_number' => $booking->guest_phone,
-                'message_body' => $replyMessage,
-                'agent_source' => 'upsell_recv',
-                'twochat_message_id' => $result['message_uuid'] ?? null,
-                'sent_at' => now(),
-            ]);
+            NighttimeQueue::sendOrQueue($twoChat, $booking->guest_phone, $replyMessage, $booking->id, 'upsell_recv');
 
             SystemLog::create([
                 'agent' => 'upsell_recv',
                 'action' => 'reply_received',
                 'booking_id' => $booking->id,
-                'payload' => ['classification' => $classification, 'offer_code' => $offer->offer_code],
+                'payload' => array_filter([
+                    'classification' => $classification,
+                    'offer_code' => $offer->offer_code,
+                    'details' => $details,
+                    'alternative_offer_code' => $alternativeOfferCode,
+                    'custom_request' => $customRequest,
+                ]),
                 'status' => 'success',
                 'duration_ms' => (int) ((microtime(true) - $start) * 1000),
             ]);
@@ -744,7 +764,7 @@ class WebhookController extends Controller
         return WebResponse::json(null, 'Non-text handled');
     }
 
-    protected function notifyManagerUpsellAccepted(Booking $booking, \App\Models\Offer $offer, TwoChatService $twoChat): void
+    protected function notifyManagerUpsellAccepted(Booking $booking, \App\Models\Offer $offer, TwoChatService $twoChat, ?string $details = null): void
     {
         $staffNumber = config('whatsapp.staff_phone_number');
 
@@ -752,16 +772,23 @@ class WebhookController extends Controller
             return;
         }
 
-        $alert = implode("\n", [
+        $lines = [
             "UPSELL ACCEPTED",
             "",
             "Guest: {$booking->guest_name}",
             "Suite: {$booking->suite_name}",
             "Offer: {$offer->title}",
             "Price: {$offer->price} {$offer->currency}",
-            "",
-            "Please prepare this service for the guest.",
-        ]);
+        ];
+
+        if ($details) {
+            $lines[] = "Details: {$details}";
+        }
+
+        $lines[] = "";
+        $lines[] = "Please prepare this service for the guest.";
+
+        $alert = implode("\n", $lines);
 
         try {
             $twoChat->sendMessage($staffNumber, $alert);
@@ -776,6 +803,75 @@ class WebhookController extends Controller
             ]);
         } catch (\Throwable $e) {
             Log::error('Manager upsell notification failed', [
+                'booking_id' => $booking->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Notify manager about a custom/off-menu request from a guest.
+     * SPEC: DIFFERENT_REQUEST and ACCEPT_AND_MORE (additional request) trigger this.
+     */
+    protected function notifyManagerCustomRequest(
+        Booking $booking,
+        ?string $customRequest,
+        ?string $alternativeOfferCode,
+        string $guestReply,
+        TwoChatService $twoChat,
+    ): void {
+        $staffNumber = config('whatsapp.staff_phone_number');
+
+        if (!$staffNumber) {
+            return;
+        }
+
+        $lines = [
+            "CUSTOM REQUEST",
+            "",
+            "Guest: {$booking->guest_name}",
+            "Suite: {$booking->suite_name}",
+        ];
+
+        if ($alternativeOfferCode) {
+            $lines[] = "Matches catalog offer: {$alternativeOfferCode}";
+        }
+
+        if ($customRequest) {
+            $lines[] = "Request: {$customRequest}";
+        }
+
+        $lines[] = "";
+        $lines[] = "Guest said: \"{$guestReply}\"";
+        $lines[] = "";
+        $lines[] = "Please respond directly to the guest.";
+
+        $alert = implode("\n", $lines);
+
+        try {
+            $twoChat->sendMessage($staffNumber, $alert);
+
+            WhatsappMessage::create([
+                'direction' => 'outbound',
+                'phone_number' => $staffNumber,
+                'message_body' => $alert,
+                'agent_source' => 'upsell_recv',
+                'booking_id' => $booking->id,
+                'sent_at' => now(),
+            ]);
+
+            SystemLog::create([
+                'agent' => 'upsell_recv',
+                'action' => 'custom_request_notified',
+                'booking_id' => $booking->id,
+                'status' => 'success',
+                'payload' => array_filter([
+                    'custom_request' => $customRequest,
+                    'alternative_offer_code' => $alternativeOfferCode,
+                ]),
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Manager custom request notification failed', [
                 'booking_id' => $booking->id,
                 'error' => $e->getMessage(),
             ]);
