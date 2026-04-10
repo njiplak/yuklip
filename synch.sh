@@ -40,7 +40,7 @@ After=network.target
 User=www-data
 Group=www-data
 WorkingDirectory=${APP_DIR}
-ExecStart=${PHP_BIN} artisan queue:work --sleep=3 --tries=3 --max-time=3600
+ExecStart=${PHP_BIN} artisan queue:work --queue=agents,default --sleep=3 --tries=3 --max-time=3600
 Restart=always
 RestartSec=5
 StartLimitBurst=5
