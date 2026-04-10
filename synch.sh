@@ -33,7 +33,7 @@ generate_service_unit() {
 
   cat <<EOF
 [Unit]
-Description=Kawakib Laravel Queue Worker
+Description=Yasmine.ai Queue Worker
 After=network.target
 
 [Service]

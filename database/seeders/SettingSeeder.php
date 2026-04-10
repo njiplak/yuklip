@@ -12,7 +12,7 @@ class SettingSeeder extends Seeder
         $settings = [
             [
                 'key' => 'app_name',
-                'value' => 'Kawakib',
+                'value' => 'Yasmine.ai',
             ],
             [
                 'key' => 'app_version',

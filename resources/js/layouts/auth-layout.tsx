@@ -11,10 +11,10 @@ export default function AuthLayout({
         <div className="grid grid-cols-12 gap-4">
             <div className="col-span-6 flex h-screen flex-col items-center justify-center bg-neutral-900 text-white">
                 <div className="max-w-md text-center">
-                    <h1 className="text-3xl font-bold tracking-tight">Kawakib</h1>
-                    <p className="mt-2 text-lg text-neutral-400">A Laravel starter kit for Kawakib MVP</p>
+                    <h1 className="text-3xl font-bold tracking-tight">Yasmine.ai</h1>
+                    <p className="mt-2 text-lg text-neutral-400">Intelligent vacation rental management</p>
                     <blockquote className="mt-8 text-sm leading-relaxed text-neutral-300">
-                        "Kawakib - Basis, a Laravel starter kit for Kawakib MVP."
+                        "Your AI-powered property management console."
                     </blockquote>
                 </div>
             </div>
