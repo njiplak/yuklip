@@ -1,6 +1,8 @@
 <?php
 
+use App\Http\Controllers\Concierge\AlertController;
 use App\Http\Controllers\Concierge\BookingController;
+use App\Http\Controllers\Concierge\FinancialReportController;
 use App\Http\Controllers\Concierge\MenuItemController;
 use App\Http\Controllers\Concierge\OfferController;
 use App\Http\Controllers\Concierge\ReportController;
@@ -76,5 +78,15 @@ Route::group(['middleware' => 'auth', 'prefix' => 'concierge', 'as' => 'backoffi
         Route::get('/', [ReportController::class, 'index'])->name('index');
         Route::get('/fetch', [ReportController::class, 'fetch'])->name('fetch');
         Route::get('/export', [ReportController::class, 'export'])->name('export');
+    });
+
+    Route::group(['prefix' => 'financial-report', 'as' => 'financial-report.'], function () {
+        Route::get('/', [FinancialReportController::class, 'index'])->name('index');
+        Route::get('/fetch', [FinancialReportController::class, 'fetch'])->name('fetch');
+    });
+
+    Route::group(['prefix' => 'alert', 'as' => 'alert.'], function () {
+        Route::get('/', [AlertController::class, 'index'])->name('index');
+        Route::get('/fetch', [AlertController::class, 'fetch'])->name('fetch');
     });
 });

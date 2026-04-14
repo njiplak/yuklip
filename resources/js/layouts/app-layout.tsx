@@ -1,5 +1,6 @@
 import { Link, usePage } from '@inertiajs/react';
 import {
+    BellRing,
     CalendarCheck,
     ChevronsUpDown,
     CreditCard,
@@ -11,8 +12,10 @@ import {
     Megaphone,
     ScrollText,
     Settings,
+    Wallet,
 } from 'lucide-react';
 import AppLogo from '@/components/app-logo';
+import { BottomNav } from '@/components/bottom-nav';
 import { PushNotificationPrompt } from '@/components/push-notification-prompt';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import {
@@ -229,6 +232,22 @@ export default function AppLayout({ children }: AppLayoutProps) {
                                         </Link>
                                     </SidebarMenuButton>
                                 </SidebarMenuItem>
+                                <SidebarMenuItem>
+                                    <SidebarMenuButton asChild isActive={isMenuActive(backoffice.concierge.financialReport.index.url())}>
+                                        <Link href={backoffice.concierge.financialReport.index.url()}>
+                                            <Wallet />
+                                            <span>Financial Reports</span>
+                                        </Link>
+                                    </SidebarMenuButton>
+                                </SidebarMenuItem>
+                                <SidebarMenuItem>
+                                    <SidebarMenuButton asChild isActive={isMenuActive(backoffice.concierge.alert.index.url())}>
+                                        <Link href={backoffice.concierge.alert.index.url()}>
+                                            <BellRing />
+                                            <span>Alerts</span>
+                                        </Link>
+                                    </SidebarMenuButton>
+                                </SidebarMenuItem>
                             </SidebarMenu>
                         </SidebarGroupContent>
                     </SidebarGroup>
@@ -254,16 +273,17 @@ export default function AppLayout({ children }: AppLayoutProps) {
             </Sidebar>
             <SidebarInset className="overflow-x-hidden">
                 <header className="flex shrink-0 items-center gap-2 border-b px-4 py-2.5 sm:px-6 sm:py-3">
-                    <SidebarTrigger />
-                    <Separator orientation="vertical" className="mx-1 h-5" />
+                    <SidebarTrigger className="hidden md:flex" />
+                    <Separator orientation="vertical" className="mx-1 hidden h-5 md:block" />
                     <h1 className="text-sm font-semibold tracking-tight sm:text-base">
                         {page.props.name}
                     </h1>
                 </header>
-                <div className="flex flex-1 flex-col gap-4 p-3 sm:p-4 md:p-6">
+                <div className="flex flex-1 flex-col gap-4 p-3 pb-16 sm:p-4 sm:pb-16 md:p-6">
                     {children}
                 </div>
             </SidebarInset>
+            <BottomNav />
             <PushNotificationPrompt />
         </SidebarProvider>
     );
