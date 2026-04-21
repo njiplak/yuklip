@@ -3,6 +3,7 @@
 namespace App\Utils;
 
 use Exception;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Inertia\Inertia;
 
 class WebResponse
@@ -47,10 +48,11 @@ class WebResponse
     public static function json($result, $message = 'Success', $status = 200)
     {
         if ($result instanceof Exception) {
+            $code = $result instanceof ModelNotFoundException ? 404 : 400;
             return response()->json([
-                "message" => $result->getMessage(),
+                "message" => $code === 404 ? 'Not found.' : $result->getMessage(),
                 "data" => null,
-            ], 400);
+            ], $code);
         } else {
             return response()->json([
                 "message" => $message,
