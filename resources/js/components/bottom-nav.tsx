@@ -1,7 +1,6 @@
 import { Link, usePage } from '@inertiajs/react';
 import {
     BarChart3,
-    BellRing,
     CalendarCheck,
     CreditCard,
     Gift,
@@ -11,7 +10,6 @@ import {
     Menu,
     ScrollText,
     Settings,
-    Wallet,
 } from 'lucide-react';
 import { useState } from 'react';
 import {
@@ -67,8 +65,6 @@ export function BottomNav() {
                 { title: 'Reports', href: backoffice.concierge.report.index.url(), icon: BarChart3 },
                 { title: 'System Logs', href: backoffice.concierge.systemLog.index.url(), icon: ScrollText },
                 { title: 'Webhook Logs', href: backoffice.concierge.webhookLog.index.url(), icon: Globe },
-                { title: 'Financial Reports', href: backoffice.concierge.financialReport.index.url(), icon: Wallet },
-                { title: 'Alerts', href: backoffice.concierge.alert.index.url(), icon: BellRing },
             ],
         },
         {

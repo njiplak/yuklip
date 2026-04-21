@@ -1,21 +1,15 @@
 <?php
 
-namespace App\Http\Controllers\Concierge;
+namespace App\Http\Controllers\Api\Concierge;
 
 use App\Http\Controllers\Controller;
 use App\Models\Booking;
 use App\Models\SystemLog;
-use Illuminate\Http\JsonResponse;
-use Inertia\Inertia;
+use App\Utils\WebResponse;
 
 class AlertController extends Controller
 {
     public function index()
-    {
-        return Inertia::render('concierge/alert/index');
-    }
-
-    public function fetch(): JsonResponse
     {
         $since = now()->subDays(7);
 
@@ -61,9 +55,7 @@ class AlertController extends Controller
             ->sortByDesc('created_at')
             ->values();
 
-        return response()->json([
-            'alerts' => $alerts,
-        ]);
+        return WebResponse::json($alerts, 'Alerts retrieved.');
     }
 
     protected function escalationDetails(SystemLog $log): string

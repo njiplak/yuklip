@@ -1,22 +1,16 @@
 <?php
 
-namespace App\Http\Controllers\Concierge;
+namespace App\Http\Controllers\Api\Concierge;
 
 use App\Http\Controllers\Controller;
 use App\Models\Setting;
 use App\Models\Transaction;
+use App\Utils\WebResponse;
 use Carbon\Carbon;
-use Illuminate\Http\JsonResponse;
-use Inertia\Inertia;
 
 class FinancialReportController extends Controller
 {
     public function index()
-    {
-        return Inertia::render('concierge/financial-report/index');
-    }
-
-    public function fetch(): JsonResponse
     {
         $month = (int) request('month', now()->month);
         $year = (int) request('year', now()->year);
@@ -45,9 +39,7 @@ class FinancialReportController extends Controller
         $traditionalCost = round($totalRevenue * $traditionalRate / 100, 2);
         $savings = round($traditionalCost - $conciergeFee, 2);
 
-        $weeklyReports = $this->buildWeeklyReports($from, $to);
-
-        return response()->json([
+        $result = [
             'period' => [
                 'month' => $from->format('F'),
                 'year' => $year,
@@ -65,8 +57,10 @@ class FinancialReportController extends Controller
                 'net_profit' => $netProfit,
             ],
             'currency' => Setting::where('key', 'currency')->value('value') ?? 'EUR',
-            'weekly_reports' => $weeklyReports,
-        ]);
+            'weekly_reports' => $this->buildWeeklyReports($from, $to),
+        ];
+
+        return WebResponse::json($result, 'Financial report retrieved.');
     }
 
     protected function buildWeeklyReports(Carbon $from, Carbon $to): array

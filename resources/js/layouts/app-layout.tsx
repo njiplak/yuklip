@@ -1,6 +1,5 @@
 import { Link, usePage } from '@inertiajs/react';
 import {
-    BellRing,
     CalendarCheck,
     ChevronsUpDown,
     CreditCard,
@@ -12,7 +11,6 @@ import {
     Megaphone,
     ScrollText,
     Settings,
-    Wallet,
 } from 'lucide-react';
 import AppLogo from '@/components/app-logo';
 import { BottomNav } from '@/components/bottom-nav';
@@ -229,22 +227,6 @@ export default function AppLayout({ children }: AppLayoutProps) {
                                         <Link href={backoffice.concierge.webhookLog.index.url()}>
                                             <Globe />
                                             <span>Webhook Logs</span>
-                                        </Link>
-                                    </SidebarMenuButton>
-                                </SidebarMenuItem>
-                                <SidebarMenuItem>
-                                    <SidebarMenuButton asChild isActive={isMenuActive(backoffice.concierge.financialReport.index.url())}>
-                                        <Link href={backoffice.concierge.financialReport.index.url()}>
-                                            <Wallet />
-                                            <span>Financial Reports</span>
-                                        </Link>
-                                    </SidebarMenuButton>
-                                </SidebarMenuItem>
-                                <SidebarMenuItem>
-                                    <SidebarMenuButton asChild isActive={isMenuActive(backoffice.concierge.alert.index.url())}>
-                                        <Link href={backoffice.concierge.alert.index.url()}>
-                                            <BellRing />
-                                            <span>Alerts</span>
                                         </Link>
                                     </SidebarMenuButton>
                                 </SidebarMenuItem>
