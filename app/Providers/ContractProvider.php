@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Contract\Auth\UserApiAuthContract;
 use App\Contract\Auth\UserAuthContract;
 use App\Contract\AuthContract;
 use App\Contract\BaseContract;
@@ -16,6 +17,7 @@ use App\Contract\Concierge\WhatsappMessageContract;
 use App\Contract\Setting\PermissionContract;
 use App\Contract\Setting\RoleContract;
 use App\Contract\Setting\SettingContract;
+use App\Service\Auth\UserApiAuthService;
 use App\Service\Auth\UserAuthService;
 use App\Service\AuthService;
 use App\Service\BaseService;
@@ -39,6 +41,7 @@ class ContractProvider extends ServiceProvider
         BaseContract::class => BaseService::class,
         AuthContract::class => AuthService::class,
         UserAuthContract::class => UserAuthService::class,
+        UserApiAuthContract::class => UserApiAuthService::class,
 
         // Setting
         SettingContract::class => SettingService::class,

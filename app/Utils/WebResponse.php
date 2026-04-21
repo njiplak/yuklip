@@ -49,7 +49,7 @@ class WebResponse
         if ($result instanceof Exception) {
             return response()->json([
                 "message" => $result->getMessage(),
-                "data" => $result,
+                "data" => null,
             ], 400);
         } else {
             return response()->json([
