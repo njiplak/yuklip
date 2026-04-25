@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Carbon\Carbon;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -11,6 +12,18 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class Booking extends Model
 {
     use HasFactory;
+
+    /** Conversation states where the AI agent stops responding to the guest. */
+    public const AI_PAUSED_STATES = [
+        'handover_human',
+        'issue_detected',
+        'cancelled',
+        'phone_missing',
+        'group_booking',
+        'suite_pending',
+    ];
+
+    protected $appends = ['ai_active'];
 
     protected $fillable = [
         'customer_id',
@@ -85,6 +98,19 @@ class Booking extends Model
     public function systemLogs(): HasMany
     {
         return $this->hasMany(SystemLog::class);
+    }
+
+    protected function aiActive(): Attribute
+    {
+        // Returns null when conversation_state wasn't loaded (e.g. limited
+        // ->get([...]) select), so callers can't mistake "column missing"
+        // for "AI is active".
+        return Attribute::get(function () {
+            if (!array_key_exists('conversation_state', $this->attributes)) {
+                return null;
+            }
+            return !in_array($this->conversation_state, self::AI_PAUSED_STATES, true);
+        });
     }
 
     public function currentDayOfStay(): ?int

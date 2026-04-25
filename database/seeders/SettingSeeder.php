@@ -64,5 +64,15 @@ IMPORTANT: Always reply in the same language the guest uses. If they write in Ar
         ];
 
         Setting::insert($settings);
+
+        // Idempotent — safe to re-run after the table is already populated.
+        // Consumed by /api/occupancy and /api/ai-status respectively.
+        $idempotent = [
+            'total_suites' => '4',
+            'ai_enabled' => 'true',
+        ];
+        foreach ($idempotent as $key => $value) {
+            Setting::firstOrCreate(['key' => $key], ['value' => $value]);
+        }
     }
 }

@@ -144,7 +144,7 @@ class WebhookController extends Controller
         }
 
         // Bot stays silent when guest is in paused/escalated states
-        if (in_array($booking->conversation_state, ['handover_human', 'issue_detected', 'cancelled', 'phone_missing', 'group_booking', 'suite_pending'])) {
+        if (in_array($booking->conversation_state, Booking::AI_PAUSED_STATES, true)) {
             SystemLog::create([
                 'agent' => 'guest_reply',
                 'action' => 'skipped',
