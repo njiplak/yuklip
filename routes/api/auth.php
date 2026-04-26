@@ -9,5 +9,6 @@ Route::prefix('api/auth')->name('api.auth.')->group(function () {
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('logout', [UserApiAuthController::class, 'logout'])->name('logout');
         Route::get('me', [UserApiAuthController::class, 'me'])->name('me');
+        Route::post('devices/fcm', [UserApiAuthController::class, 'registerDevice'])->name('devices.fcm');
     });
 });

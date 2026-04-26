@@ -17,17 +17,18 @@ class PushNotificationService
         try {
             $users = User::whereHas('pushSubscriptions')->get();
 
-            if ($users->isEmpty()) {
-                return;
+            if ($users->isNotEmpty()) {
+                Notification::send($users, new ManagerPushNotification($title, $body, $url, $tag));
             }
-
-            Notification::send($users, new ManagerPushNotification($title, $body, $url, $tag));
         } catch (\Throwable $e) {
             Log::error('Push notification failed', [
                 'title' => $title,
                 'error' => $e->getMessage(),
             ]);
         }
+
+        // Mobile (FCM) fan-out runs independently so a WebPush failure does not block it.
+        FcmPushService::broadcast($title, $body, $url, $tag);
     }
 
     public static function newBooking(string $guestName, string $suite, string $dates): void

@@ -47,4 +47,12 @@ return [
         'image_model' => env('OPENROUTER_IMAGE_MODEL', 'sourceful/riverflow-v2-fast'),
     ],
 
+    'fcm' => [
+        // Absolute path (or path relative to base_path()) to the Firebase service-account JSON.
+        // Download it from Firebase Console → Project Settings → Service Accounts → Generate new private key.
+        // Place the file outside the public/ directory (e.g. storage/app/firebase/service-account.json)
+        // and set FIREBASE_CREDENTIALS=storage/app/firebase/service-account.json in .env.
+        'credentials' => env('FIREBASE_CREDENTIALS'),
+    ],
+
 ];

@@ -10,6 +10,8 @@ class ApiLoginRequest extends LoginRequest
     {
         return array_merge(parent::rules(), [
             'device_name' => ['nullable', 'string', 'max:100'],
+            'fcm_token' => ['nullable', 'string', 'max:512'],
+            'platform' => ['nullable', 'string', 'in:android,ios,web,macos,windows'],
         ]);
     }
 }
