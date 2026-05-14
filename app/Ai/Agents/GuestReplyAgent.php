@@ -4,6 +4,7 @@ namespace App\Ai\Agents;
 
 use App\Models\Booking;
 use App\Models\MenuItem;
+use App\Models\Offer;
 use App\Models\Setting;
 use App\Models\WhatsappMessage;
 use App\Service\Booking\StayContext;
@@ -77,13 +78,15 @@ class GuestReplyAgent implements Agent, Conversational
         $preferenceInstructions = $this->preferenceInstructions();
         $serviceRequestGuidelines = $this->serviceRequestGuidelines();
         $menuContext = $this->menuContext();
+        $offerContext = $this->offerContext();
 
         return $systemPrompt . "\n\n" . $guestContext
             . "\n\n" . $stayContext
             . ($returningGuestContext ? "\n\n" . $returningGuestContext : '')
             . ($preferenceInstructions ? "\n\n" . $preferenceInstructions : '')
             . "\n\n" . $serviceRequestGuidelines
-            . ($menuContext ? "\n\n" . $menuContext : '');
+            . ($menuContext ? "\n\n" . $menuContext : '')
+            . ($offerContext ? "\n\n" . $offerContext : '');
     }
 
     /**
@@ -264,6 +267,45 @@ class GuestReplyAgent implements Agent, Conversational
             '## Available Menu & Drinks',
             '',
             'When a guest asks about food or drinks, use ONLY this list. If an item is not listed here, tell the guest you will check with the kitchen.',
+            '',
+            $grouped,
+        ]);
+    }
+
+    protected function offerContext(): ?string
+    {
+        $offers = Offer::active()
+            ->orderBy('timing_rule')
+            ->orderBy('title')
+            ->get();
+
+        if ($offers->isEmpty()) {
+            return null;
+        }
+
+        $grouped = $offers->groupBy('timing_rule')->map(function ($bucket, $rule) {
+            $lines = $bucket->map(function (Offer $offer) {
+                $priceSegment = $offer->price
+                    ? " — {$offer->price} {$offer->currency}"
+                    : '';
+
+                return "- [{$offer->offer_code}] {$offer->title}{$priceSegment}: {$offer->description}";
+            })->implode("\n");
+
+            $header = ucfirst(str_replace('_', ' ', $rule));
+
+            return "### {$header}\n{$lines}";
+        })->implode("\n\n");
+
+        return implode("\n", [
+            '## Available Add-on Offers',
+            '',
+            'These are bookable experiences, services, and upgrades the guest can purchase. Each offer is grouped by its `timing_rule` — the stay moment when it is most relevant. Cross-reference with the guest\'s current stay phase and day_of_stay from "Current Status" above.',
+            '',
+            'When to mention an offer:',
+            '- Proactively: only when the current stay phase or day_of_stay matches the offer\'s timing_rule bucket.',
+            '- Reactively: if the guest asks about activities, experiences, dining add-ons, or transfers, you may mention any relevant offer regardless of timing.',
+            '- Never fabricate offers that are not listed here. If a guest asks for something not on this list, tell them you will check with the team.',
             '',
             $grouped,
         ]);

@@ -39,14 +39,17 @@ class MenuItemSeeder extends Seeder
             ['name' => 'Date Platter with Nuts', 'name_fr' => 'Plateau de dattes et fruits secs', 'category' => 'snacks', 'price' => 50.00, 'description' => 'Premium Medjool dates with almonds and walnuts'],
         ];
 
-        MenuItem::insert(array_map(fn ($item) => array_merge([
-            'currency' => 'MAD',
-            'is_available' => true,
-            'availability_note' => null,
-            'description' => null,
-            'name_fr' => null,
-            'created_at' => now(),
-            'updated_at' => now(),
-        ], $item), $items));
+        foreach ($items as $item) {
+            MenuItem::updateOrCreate(
+                ['name' => $item['name']],
+                array_merge([
+                    'currency' => 'MAD',
+                    'is_available' => true,
+                    'availability_note' => null,
+                    'description' => null,
+                    'name_fr' => null,
+                ], $item),
+            );
+        }
     }
 }

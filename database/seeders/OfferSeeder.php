@@ -84,6 +84,11 @@ class OfferSeeder extends Seeder
             ],
         ];
 
-        Offer::insert($offers);
+        foreach ($offers as $offer) {
+            Offer::updateOrCreate(
+                ['offer_code' => $offer['offer_code']],
+                $offer,
+            );
+        }
     }
 }
