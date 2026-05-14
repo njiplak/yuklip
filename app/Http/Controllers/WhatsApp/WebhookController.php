@@ -20,6 +20,7 @@ use App\Service\PushNotificationService;
 use App\Service\WhatsApp\NighttimeQueue;
 use App\Service\WhatsApp\TwoChatService;
 use App\Utils\WebResponse;
+use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -195,10 +196,18 @@ class WebhookController extends Controller
                 }
             }
 
-            $response = (new GuestReplyAgent($booking))->prompt($text);
+            $agent = new GuestReplyAgent($booking);
+            $response = $agent->prompt($text);
             $reply = (string) $response;
+            $targetedPref = $agent->nextPreferenceToAsk();
 
             NighttimeQueue::sendOrQueue($twoChat, $booking->guest_phone, $reply, $booking->id, 'guest_reply');
+
+            if ($targetedPref) {
+                $askedMap = $booking->preferences_asked ?? [];
+                $askedMap[$targetedPref] = Carbon::now()->toIso8601String();
+                $booking->update(['preferences_asked' => $askedMap]);
+            }
 
             SystemLog::create([
                 'agent' => 'guest_reply',

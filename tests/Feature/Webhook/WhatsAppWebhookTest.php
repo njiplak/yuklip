@@ -380,9 +380,17 @@ test('GuestReplyAgent shows active collection instructions when preferences are 
     $agent = new GuestReplyAgent($booking);
     $instructions = $agent->instructions();
 
+    // Shows what's already collected
     expect($instructions)->toContain('Preference Collection (ACTIVE)');
     expect($instructions)->toContain('Already collected: Arrival time: around 3pm');
-    expect($instructions)->toContain('bed preference');
+
+    // Directs the bot to ask about exactly ONE preference (next priority after
+    // arrival_time is airport_transfer — logistical urgency first).
+    expect($instructions)->toContain('Ask about exactly ONE preference this turn');
+    expect($instructions)->toContain('whether they need an airport transfer');
+
+    // The agent picks airport_transfer deterministically.
+    expect($agent->nextPreferenceToAsk())->toBe('airport_transfer');
 });
 
 // ─── Fix B: Service request detection and staff notification ───
@@ -506,6 +514,62 @@ test('GuestReplyAgent excludes menu section when no items exist', function () {
     $instructions = $agent->instructions();
 
     expect($instructions)->not->toContain('Available Menu & Drinks');
+});
+
+test('persists preferences_asked timestamp after directing the bot to ask a preference', function () {
+    $booking = Booking::factory()->create([
+        'guest_phone' => '+33612345678',
+        'booking_status' => 'confirmed',
+        'conversation_state' => 'waiting_preferences',
+        'pref_arrival_time' => null,
+        'pref_bed_type' => null,
+        'pref_airport_transfer' => null,
+        'pref_special_requests' => null,
+        'preferences_asked' => null,
+    ]);
+
+    $this->postJson('/whatsapp/webhook', [
+        'remote_phone_number' => '+33612345678',
+        'sent_by' => 'user',
+        'message' => ['text' => 'Hi there'],
+    ], whatsappHeaders());
+
+    $booking->refresh();
+
+    // Nothing in the message extracts a preference, so arrival_time (highest priority)
+    // is still missing — the bot was directed to ask about it, and the controller
+    // recorded that timestamp.
+    expect($booking->preferences_asked)->toBeArray();
+    expect($booking->preferences_asked)->toHaveKey('arrival_time');
+    expect($booking->preferences_asked['arrival_time'])->toBeString();
+});
+
+test('does not re-ask the same preference on a follow-up message within cooldown', function () {
+    $booking = Booking::factory()->create([
+        'guest_phone' => '+33612345678',
+        'booking_status' => 'confirmed',
+        'conversation_state' => 'waiting_preferences',
+        'pref_arrival_time' => null,
+        'pref_bed_type' => null,
+        'pref_airport_transfer' => null,
+        'pref_special_requests' => null,
+        'preferences_asked' => [
+            'arrival_time' => \Carbon\Carbon::now()->subHour()->toIso8601String(),
+        ],
+    ]);
+
+    $this->postJson('/whatsapp/webhook', [
+        'remote_phone_number' => '+33612345678',
+        'sent_by' => 'user',
+        'message' => ['text' => 'Hello again'],
+    ], whatsappHeaders());
+
+    $booking->refresh();
+
+    // arrival_time was just asked; controller should have moved on to airport_transfer.
+    expect($booking->preferences_asked)->toHaveKey('airport_transfer');
+    // arrival_time entry should still be present (untouched), not overwritten.
+    expect($booking->preferences_asked)->toHaveKey('arrival_time');
 });
 
 /**

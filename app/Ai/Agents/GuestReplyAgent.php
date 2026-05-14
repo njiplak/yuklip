@@ -6,6 +6,8 @@ use App\Models\Booking;
 use App\Models\MenuItem;
 use App\Models\Setting;
 use App\Models\WhatsappMessage;
+use App\Service\Booking\StayContext;
+use Carbon\Carbon;
 use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Contracts\Conversational;
 use Laravel\Ai\Enums\Lab;
@@ -15,6 +17,36 @@ use Laravel\Ai\Promptable;
 class GuestReplyAgent implements Agent, Conversational
 {
     use Promptable;
+
+    /** Hours before a previously-asked preference can be asked again. */
+    public const ASK_COOLDOWN_HOURS = 24;
+
+    /**
+     * Preference fields in the order they should be asked. Logistical urgency
+     * (arrival, transfer) comes before comfort (bed) and open-ended (requests).
+     *
+     * @var array<string, string>
+     */
+    protected const PREFERENCE_PRIORITY = [
+        'arrival_time' => 'arrival time',
+        'airport_transfer' => 'whether they need an airport transfer',
+        'bed_type' => 'bed preference (double bed or twin beds)',
+        'special_requests' => 'any special requests (allergies, celebrations, dietary needs, baby cot, etc.)',
+    ];
+
+    /**
+     * Human-readable labels for the "already collected" summary, separate from
+     * the priority labels which are phrased as questions.
+     */
+    protected const PREFERENCE_DISPLAY_LABELS = [
+        'arrival_time' => 'Arrival time',
+        'airport_transfer' => 'Airport transfer',
+        'bed_type' => 'Bed type',
+        'special_requests' => 'Special requests',
+    ];
+
+    private ?string $cachedNextPreference = null;
+    private bool $nextPreferenceComputed = false;
 
     public function __construct(protected Booking $booking) {}
 
@@ -40,16 +72,63 @@ class GuestReplyAgent implements Agent, Conversational
             $this->booking->special_requests ? "- Special Requests: {$this->booking->special_requests}" : null,
         ]));
 
+        $stayContext = StayContext::format(StayContext::compute($this->booking));
         $returningGuestContext = $this->returningGuestContext();
         $preferenceInstructions = $this->preferenceInstructions();
         $serviceRequestGuidelines = $this->serviceRequestGuidelines();
         $menuContext = $this->menuContext();
 
         return $systemPrompt . "\n\n" . $guestContext
+            . "\n\n" . $stayContext
             . ($returningGuestContext ? "\n\n" . $returningGuestContext : '')
             . ($preferenceInstructions ? "\n\n" . $preferenceInstructions : '')
             . "\n\n" . $serviceRequestGuidelines
             . ($menuContext ? "\n\n" . $menuContext : '');
+    }
+
+    /**
+     * Which preference should the bot ask about this turn, if any.
+     * Deterministic so the controller can persist the matching timestamp
+     * after dispatch — the bot is directed to ask about exactly this field.
+     *
+     * Returns null when all preferences are collected, when none are
+     * eligible (all recently asked within cooldown), or when the booking
+     * is in the post-collection state.
+     */
+    public function nextPreferenceToAsk(): ?string
+    {
+        if (!$this->nextPreferenceComputed) {
+            $this->cachedNextPreference = $this->computeNextPreferenceToAsk();
+            $this->nextPreferenceComputed = true;
+        }
+
+        return $this->cachedNextPreference;
+    }
+
+    protected function computeNextPreferenceToAsk(): ?string
+    {
+        if (($this->booking->conversation_state ?? 'preferences_complete') === 'preferences_complete') {
+            return null;
+        }
+
+        $asked = $this->booking->preferences_asked ?? [];
+        $cooldownThreshold = Carbon::now()->subHours(self::ASK_COOLDOWN_HOURS);
+
+        foreach (self::PREFERENCE_PRIORITY as $key => $_label) {
+            if ($this->booking->{"pref_{$key}"}) {
+                continue; // already collected
+            }
+
+            $askedAt = $asked[$key] ?? null;
+
+            if ($askedAt && Carbon::parse($askedAt)->isAfter($cooldownThreshold)) {
+                continue; // asked too recently — wait
+            }
+
+            return $key;
+        }
+
+        return null;
     }
 
     protected function returningGuestContext(): ?string
@@ -77,52 +156,73 @@ class GuestReplyAgent implements Agent, Conversational
             return $this->collectedPreferencesSummary();
         }
 
+        $asked = $this->booking->preferences_asked ?? [];
+        $cooldownThreshold = Carbon::now()->subHours(self::ASK_COOLDOWN_HOURS);
+
         $collected = [];
-        $missing = [];
+        $waiting = [];   // missing, but asked recently — DO NOT re-ask this turn
 
-        if ($this->booking->pref_arrival_time) {
-            $collected[] = "Arrival time: {$this->booking->pref_arrival_time}";
-        } else {
-            $missing[] = 'arrival time';
+        foreach (self::PREFERENCE_PRIORITY as $key => $label) {
+            $value = $this->booking->{"pref_{$key}"};
+
+            if ($value) {
+                $displayLabel = self::PREFERENCE_DISPLAY_LABELS[$key];
+                $collected[] = "{$displayLabel}: {$value}";
+                continue;
+            }
+
+            $askedAt = $asked[$key] ?? null;
+            if ($askedAt && Carbon::parse($askedAt)->isAfter($cooldownThreshold)) {
+                $waiting[] = $label;
+            }
         }
 
-        if ($this->booking->pref_bed_type) {
-            $collected[] = "Bed type: {$this->booking->pref_bed_type}";
-        } else {
-            $missing[] = 'bed preference (double bed or twin beds)';
-        }
-
-        if ($this->booking->pref_airport_transfer) {
-            $collected[] = "Airport transfer: {$this->booking->pref_airport_transfer}";
-        } else {
-            $missing[] = 'whether they need airport transfer';
-        }
-
-        if ($this->booking->pref_special_requests) {
-            $collected[] = "Special requests: {$this->booking->pref_special_requests}";
-        } else {
-            $missing[] = 'any special requests (allergies, celebrations, dietary needs, etc.)';
-        }
+        $nextToAsk = $this->nextPreferenceToAsk();
+        $nextLabel = $nextToAsk ? self::PREFERENCE_PRIORITY[$nextToAsk] : null;
 
         $collectedText = empty($collected) ? 'Nothing yet.' : implode(', ', $collected);
-        $missingText = implode(', ', $missing);
 
-        return implode("\n", [
+        $lines = [
             '## Preference Collection (ACTIVE)',
             '',
-            'You are currently collecting stay preferences from this guest. This is your priority alongside answering any questions they have.',
+            'You are collecting stay preferences from this guest. Be conversational, not interrogative.',
             '',
             "Already collected: {$collectedText}",
-            "Still needed: {$missingText}",
-            '',
-            'Guidelines:',
-            '- If the guest provides preferences in their message, acknowledge them warmly.',
-            '- After acknowledging, naturally ask about the NEXT missing preference. Do not ask for multiple at once.',
-            '- If the guest asks a question (e.g. "what time is check-in?"), answer it first, then gently steer back to the missing preferences.',
-            '- If the guest seems reluctant or says "no special requests" or "that\'s all", that is fine — accept it.',
-            '- Never be pushy. The guest should feel like a natural conversation, not an interrogation.',
-            '- Match the guest\'s language and energy.',
-        ]);
+        ];
+
+        if ($nextLabel) {
+            $lines[] = '';
+            $lines[] = "**Ask about exactly ONE preference this turn: {$nextLabel}**";
+        }
+
+        if (!empty($waiting)) {
+            $lines[] = '';
+            $lines[] = 'DO NOT re-ask these — they were asked recently and the guest has not answered yet. Wait for them to bring it up.';
+            foreach ($waiting as $item) {
+                $lines[] = "- {$item}";
+            }
+        }
+
+        if (!$nextLabel && empty($waiting)) {
+            // No missing prefs left and state hasn't flipped yet — fall back to summary.
+            return $this->collectedPreferencesSummary();
+        }
+
+        $lines[] = '';
+        $lines[] = 'Guidelines:';
+        $lines[] = '- If the guest provides preferences in their message, acknowledge them warmly.';
+
+        if ($nextLabel) {
+            $lines[] = '- After acknowledging, ask about EXACTLY the one preference marked above. Never ask for multiple at once.';
+        } else {
+            $lines[] = '- Do NOT ask any preference questions this turn — all pending ones were already asked recently.';
+        }
+
+        $lines[] = '- If the guest asks a question, answer it first.';
+        $lines[] = '- If the guest declines or says "no special requests" or "that\'s all", accept it.';
+        $lines[] = '- Match the guest\'s language and energy.';
+
+        return implode("\n", $lines);
     }
 
     protected function serviceRequestGuidelines(): string

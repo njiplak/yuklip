@@ -49,6 +49,7 @@ class Booking extends Model
         'pref_bed_type',
         'pref_airport_transfer',
         'pref_special_requests',
+        'preferences_asked',
         'follow_up_count',
         'preferences_briefing_sent',
         'revenue_logged',
@@ -67,6 +68,7 @@ class Booking extends Model
             'revenue_logged' => 'boolean',
             'lodgify_synced_at' => 'datetime',
             'upsell_offer_sent_at' => 'datetime',
+            'preferences_asked' => 'array',
         ];
     }
 
