@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Concierge\BookingController;
+use App\Http\Controllers\Concierge\FinancialController;
 use App\Http\Controllers\Concierge\MenuItemController;
 use App\Http\Controllers\Concierge\OfferController;
 use App\Http\Controllers\Concierge\ReportController;
@@ -70,6 +71,11 @@ Route::group(['middleware' => 'auth', 'prefix' => 'concierge', 'as' => 'backoffi
     Route::group(['prefix' => 'webhook-log', 'as' => 'webhook-log.'], function () {
         Route::get('/', [WebhookLogController::class, 'index'])->name('index');
         Route::get('/fetch', [WebhookLogController::class, 'fetch'])->name('fetch');
+    });
+
+    Route::group(['prefix' => 'financial', 'as' => 'financial.'], function () {
+        Route::get('/', [FinancialController::class, 'index'])->name('index');
+        Route::get('/fetch', [FinancialController::class, 'fetch'])->name('fetch');
     });
 
     Route::group(['prefix' => 'report', 'as' => 'report.'], function () {

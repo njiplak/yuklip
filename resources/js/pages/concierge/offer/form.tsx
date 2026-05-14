@@ -15,6 +15,14 @@ import type { Offer } from '@/types/offer';
 
 const categories = ['wellness', 'dining', 'experience', 'transport'];
 
+const timingRules: { value: string; label: string }[] = [
+    { value: 'arrival_day', label: 'Arrival day' },
+    { value: 'day_2', label: 'Day 2' },
+    { value: 'day_3', label: 'Day 3' },
+    { value: 'day_4', label: 'Day 4' },
+    { value: 'day_1_before_checkout', label: 'Day before checkout' },
+];
+
 type Props = { offer?: Offer };
 
 export default function OfferForm({ offer }: Props) {
@@ -66,8 +74,12 @@ export default function OfferForm({ offer }: Props) {
                     </div>
                     <div className="flex flex-col gap-1.5">
                         <Label>Timing Rule</Label>
-                        <Input value={data.timing_rule} onChange={(e) => setData('timing_rule', e.target.value)} placeholder="e.g. arrival_day, day_2, day_1_before_checkout" />
-                        <p className="text-xs text-muted-foreground">Use: arrival_day, day_2, day_3, day_4, day_1_before_checkout</p>
+                        <Select value={data.timing_rule} onValueChange={(v) => setData('timing_rule', v)}>
+                            <SelectTrigger><SelectValue placeholder="Select when to send" /></SelectTrigger>
+                            <SelectContent>
+                                {timingRules.map((r) => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}
+                            </SelectContent>
+                        </Select>
                         <InputError message={errors?.timing_rule} />
                     </div>
                     <div className="flex flex-col gap-1.5">
