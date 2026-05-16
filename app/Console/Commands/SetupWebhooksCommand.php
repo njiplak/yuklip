@@ -21,6 +21,9 @@ class SetupWebhooksCommand extends Command
      * `booking_change` is what fires on cancellation/decline — there is no
      * standalone `booking_cancelled` or `booking_deleted` event in Lodgify v1.
      * The handler routes by `booking.status` for cancellations.
+     *
+     * `booking_payment_*` events are NOT valid Lodgify v1 events — they return
+     * HTTP 500 on subscribe. Do not add them back without confirmation.
      */
     protected array $lodgifyEvents = [
         'booking_new_any_status',
@@ -28,9 +31,6 @@ class SetupWebhooksCommand extends Command
         'rate_change',
         'availability_change',
         'guest_message_received',
-        'booking_payment_received',
-        'booking_payment_refunded',
-        'booking_payment_deleted',
     ];
 
     public function handle(LodgifyService $lodgify, TwoChatService $twoChat): int
@@ -47,11 +47,16 @@ class SetupWebhooksCommand extends Command
         $failed = false;
 
         // --- Lodgify webhooks ---
+        // Each event gets a unique target URL via the `?event=...` query
+        // string. Lodgify enforces uniqueness on the full callback URL, so
+        // reusing a single URL across events triggers 409 "callback already
+        // exists" after the first registration. Query strings don't affect
+        // Laravel routing — all variants still hit /lodgify/webhook.
         $this->info('Registering Lodgify webhooks...');
         $secret = null;
 
         foreach ($this->lodgifyEvents as $event) {
-            $targetUrl = $baseUrl . '/lodgify/webhook';
+            $targetUrl = $baseUrl . '/lodgify/webhook?event=' . urlencode($event);
             try {
                 $result = $lodgify->subscribeWebhook($event, $targetUrl);
 
