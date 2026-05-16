@@ -165,10 +165,16 @@ class SetupWebhooksCommand extends Command
         }
 
         // Drop any rows whose subscription_id we couldn't unsubscribe
-        // (orphans Lodgify has but we want to forget locally).
-        WebhookSubscription::where('source', 'lodgify')
-            ->where('target_url', 'like', $ownPrefix . '%')
-            ->delete();
+        // (orphans Lodgify has but we want to forget locally). Tolerate a
+        // missing table so a first-run --fresh doesn't abort before the
+        // subscribe loop has a chance to run.
+        try {
+            WebhookSubscription::where('source', 'lodgify')
+                ->where('target_url', 'like', $ownPrefix . '%')
+                ->delete();
+        } catch (\Throwable $e) {
+            $this->warn("  Local subscription cleanup skipped: {$e->getMessage()}");
+        }
 
         if ($unsubscribed === 0) {
             $this->line('  Nothing to unsubscribe.');
