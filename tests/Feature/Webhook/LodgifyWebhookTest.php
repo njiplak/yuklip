@@ -51,6 +51,30 @@ test('creates new booking from lodgify webhook', function () {
     expect(SystemLog::where('agent', 'lodgify_sync')->where('action', 'booking_created')->count())->toBe(1);
 });
 
+test('handles lodgify-shaped array-wrapped payload (production shape)', function () {
+    // Lodgify wraps the real delivery in a single-element JSON array. This
+    // test posts the wire shape to ensure the unwrap logic in handle() works
+    // when ?event= is in the URL.
+    $inner = makeLodgifyBookingPayload(action: 'booking_change', lodgifyId: 99100);
+    $wireBody = [$inner];
+
+    $url = lodgifyWebhookUrl($inner);
+    $body = json_encode($wireBody);
+    $secret = WebhookSubscription::where('source', 'lodgify')->where('event', 'booking_change')->value('secret');
+    $headers = ['ms-signature' => 'sha256=' . strtoupper(hash_hmac('sha256', $body, (string) $secret))];
+
+    $response = $this->call('POST', $url, [], [], [], [
+        'CONTENT_TYPE' => 'application/json',
+        'HTTP_MS_SIGNATURE' => $headers['ms-signature'],
+    ], $body);
+
+    expect($response->status())->toBe(200);
+
+    $booking = Booking::where('lodgify_booking_id', '99100')->first();
+    expect($booking)->not->toBeNull();
+    expect($booking->guest_name)->toBe('John Doe');
+});
+
 test('sends welcome message for new confirmed booking', function () {
     $payload = makeLodgifyBookingPayload(action: 'booking_new_any_status', lodgifyId: 99002);
 

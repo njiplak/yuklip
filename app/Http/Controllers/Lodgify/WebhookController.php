@@ -45,24 +45,49 @@ class WebhookController extends Controller
             return response()->json(['error' => 'Invalid signature'], 401);
         }
 
-        // Lodgify sends the payload as a JSON array with a single element.
-        // Unwrap it so the rest of the controller can use $request->input() normally.
-        $data = $request->all();
-        if (array_is_list($data) && count($data) === 1) {
-            $request->replace($data[0]);
+        // Lodgify wraps the payload as a single-element JSON array. Unwrap from
+        // the raw JSON body — NOT from $request->all() — because the latter
+        // merges the `?event=` query string in, breaking array_is_list().
+        $json = $request->json()->all();
+        if (is_array($json) && array_is_list($json) && count($json) === 1) {
+            $request->replace($json[0]);
+        } elseif (is_array($json)) {
+            $request->replace($json);
         }
 
         $action = $request->input('action');
 
-        return match ($action) {
-            'booking_new_any_status' => $this->handleBookingSync($request, $twoChat),
-            'booking_change' => $this->routeBookingChange($request, $twoChat),
-            'rate_change' => $this->handleRateChange($request),
-            'availability_change' => $this->handleAvailabilityChange($request),
-            'guest_message_received' => $this->handleGuestMessage($request),
-            'booking_payment_received', 'booking_payment_refunded', 'booking_payment_deleted' => $this->handlePaymentEvent($request),
-            default => $this->handleUnknown($request),
-        };
+        try {
+            $response = match ($action) {
+                'booking_new_any_status' => $this->handleBookingSync($request, $twoChat),
+                'booking_change' => $this->routeBookingChange($request, $twoChat),
+                'rate_change' => $this->handleRateChange($request),
+                'availability_change' => $this->handleAvailabilityChange($request),
+                'guest_message_received' => $this->handleGuestMessage($request),
+                'booking_payment_received', 'booking_payment_refunded', 'booking_payment_deleted' => $this->handlePaymentEvent($request),
+                default => $this->handleUnknown($request),
+            };
+
+            $webhookLog->update([
+                'status_code' => $response->status(),
+                'response_body' => json_decode($response->getContent(), true),
+            ]);
+
+            return $response;
+        } catch (\Throwable $e) {
+            Log::error('Lodgify webhook handler threw', [
+                'action' => $action,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            $webhookLog->update([
+                'status_code' => 500,
+                'response_body' => ['error' => $e->getMessage()],
+            ]);
+
+            throw $e;
+        }
     }
 
     /**
