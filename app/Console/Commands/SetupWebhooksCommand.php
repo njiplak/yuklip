@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Models\WebhookSubscription;
 use App\Service\Lodgify\LodgifyService;
 use App\Service\WhatsApp\TwoChatService;
 use Illuminate\Console\Command;
@@ -52,39 +53,39 @@ class SetupWebhooksCommand extends Command
         // reusing a single URL across events triggers 409 "callback already
         // exists" after the first registration. Query strings don't affect
         // Laravel routing — all variants still hit /lodgify/webhook.
+        //
+        // Lodgify issues a distinct webhook secret PER SUBSCRIPTION (not per
+        // account), so we persist each (event, subscription_id, secret) tuple
+        // to the webhook_subscriptions table. The handler looks up the secret
+        // by the `?event=...` query param on the incoming request.
         $this->info('Registering Lodgify webhooks...');
-        $secret = null;
 
         foreach ($this->lodgifyEvents as $event) {
             $targetUrl = $baseUrl . '/lodgify/webhook?event=' . urlencode($event);
             try {
                 $result = $lodgify->subscribeWebhook($event, $targetUrl);
 
-                if (isset($result['secret']) && !$secret) {
-                    $secret = $result['secret'];
+                $subscriptionId = $result['id'] ?? null;
+                $secret = $result['secret'] ?? null;
+
+                if (!$secret) {
+                    throw new \RuntimeException('subscribe response missing secret: ' . json_encode($result));
                 }
 
-                $this->line("  {$event} => {$targetUrl} [OK]");
+                WebhookSubscription::updateOrCreate(
+                    ['source' => 'lodgify', 'event' => $event],
+                    [
+                        'subscription_id' => $subscriptionId,
+                        'secret' => $secret,
+                        'target_url' => $targetUrl,
+                    ],
+                );
+
+                $this->line("  {$event} => {$targetUrl} [OK, secret stored]");
             } catch (\Throwable $e) {
                 $this->error("  {$event} => FAILED: {$e->getMessage()}");
                 $failed = true;
             }
-        }
-
-        $configuredSecret = config('lodgify.webhook_secret');
-
-        if ($secret && $secret !== $configuredSecret) {
-            $this->newLine();
-            $this->warn('  ⚠ Lodgify returned a NEW webhook secret that differs from your .env!');
-            $this->warn('  Update LODGIFY_WEBHOOK_SECRET in your .env:');
-            $this->newLine();
-            $this->line("  LODGIFY_WEBHOOK_SECRET={$secret}");
-            $this->newLine();
-        }
-
-        if ($configuredSecret && !$secret) {
-            $this->newLine();
-            $this->line("  LODGIFY_WEBHOOK_SECRET={$configuredSecret}");
         }
 
         // --- 2Chat webhook ---
@@ -153,12 +154,21 @@ class SetupWebhooksCommand extends Command
 
             try {
                 $lodgify->unsubscribeWebhook($id);
+                WebhookSubscription::where('source', 'lodgify')
+                    ->where('subscription_id', $id)
+                    ->delete();
                 $this->line("  Unsubscribed: {$event} ({$id}) [OK]");
                 $unsubscribed++;
             } catch (\Throwable $e) {
                 $this->error("  Unsubscribe {$event} ({$id}) => FAILED: {$e->getMessage()}");
             }
         }
+
+        // Drop any rows whose subscription_id we couldn't unsubscribe
+        // (orphans Lodgify has but we want to forget locally).
+        WebhookSubscription::where('source', 'lodgify')
+            ->where('target_url', 'like', $ownPrefix . '%')
+            ->delete();
 
         if ($unsubscribed === 0) {
             $this->line('  Nothing to unsubscribe.');
@@ -171,12 +181,14 @@ class SetupWebhooksCommand extends Command
     {
         $ok = true;
 
+        // Lodgify webhook secrets are issued per subscription at register time
+        // and persisted into the webhook_subscriptions table, so no
+        // LODGIFY_WEBHOOK_SECRET env var is required.
         $required = [
             'ANTHROPIC_API_KEY' => config('ai.providers.anthropic.key'),
             'LODGIFY_API_KEY' => config('lodgify.api_key'),
             'TWOCHAT_API_KEY' => config('whatsapp.twochat_api_key'),
             'TWOCHAT_PHONE_NUMBER' => config('whatsapp.twochat_phone_number'),
-            'WHATSAPP_WEBHOOK_SECRET' => config('whatsapp.webhook_secret'),
             'STAFF_WHATSAPP_NUMBER' => config('whatsapp.staff_phone_number'),
         ];
 
@@ -189,14 +201,6 @@ class SetupWebhooksCommand extends Command
             } else {
                 $this->line("  {$name} [set]");
             }
-        }
-
-        // LODGIFY_WEBHOOK_SECRET is optional for preflight — it will be returned during registration
-        $webhookSecret = config('lodgify.webhook_secret');
-        if ($webhookSecret) {
-            $this->line("  LODGIFY_WEBHOOK_SECRET [set]");
-        } else {
-            $this->warn("  LODGIFY_WEBHOOK_SECRET [not set — will be returned by Lodgify during registration]");
         }
 
         if (config('app.url') === 'http://localhost') {

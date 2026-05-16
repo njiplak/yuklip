@@ -10,6 +10,7 @@ use App\Models\Customer;
 use App\Models\SystemLog;
 use App\Models\Transaction;
 use App\Models\WebhookLog;
+use App\Models\WebhookSubscription;
 use App\Models\WhatsappMessage;
 use App\Service\PushNotificationService;
 use App\Service\WhatsApp\TwoChatService;
@@ -575,15 +576,15 @@ class WebhookController extends Controller
         };
     }
 
+    /**
+     * Lodgify issues a distinct webhook secret per subscription, so we look up
+     * the secret by the `?event=` query string we registered. The event in the
+     * URL is the one we set at subscribe time — Lodgify echoes it back on every
+     * delivery — so trusting it here is safe: if it's tampered, the looked-up
+     * secret won't match the signature and verification fails closed.
+     */
     protected function verifySignature(Request $request): bool
     {
-        $secret = config('lodgify.webhook_secret');
-
-        if (!$secret) {
-            Log::warning('Lodgify webhook secret not configured — rejecting request');
-            return false;
-        }
-
         $signature = $request->header('ms-signature');
 
         if (!$signature) {
@@ -591,19 +592,37 @@ class WebhookController extends Controller
             return false;
         }
 
+        $event = (string) $request->query('event', '');
+
+        if ($event === '') {
+            Log::warning('Lodgify webhook missing ?event= query param', [
+                'url' => $request->fullUrl(),
+            ]);
+            return false;
+        }
+
+        $subscription = WebhookSubscription::where('source', 'lodgify')
+            ->where('event', $event)
+            ->first();
+
+        if (!$subscription) {
+            Log::warning('Lodgify webhook subscription not found for event', [
+                'event' => $event,
+            ]);
+            return false;
+        }
+
         $body = $request->getContent();
-        $expectedUpper = 'sha256=' . strtoupper(hash_hmac('sha256', $body, $secret));
-        $expectedLower = 'sha256=' . strtolower(hash_hmac('sha256', $body, $secret));
+        $expectedUpper = 'sha256=' . strtoupper(hash_hmac('sha256', $body, $subscription->secret));
+        $expectedLower = 'sha256=' . strtolower(hash_hmac('sha256', $body, $subscription->secret));
 
         if (!hash_equals($expectedUpper, $signature) && !hash_equals($expectedLower, $signature)) {
             Log::warning('Lodgify webhook signature mismatch', [
+                'event'          => $event,
                 'received'       => $signature,
                 'computed_upper' => $expectedUpper,
-                'computed_lower' => $expectedLower,
                 'body_length'    => strlen($body),
                 'body_sha256'    => hash('sha256', $body),
-                'secret_length'  => strlen($secret),
-                'secret_prefix'  => substr($secret, 0, 4) . '...',
             ]);
             return false;
         }

@@ -4,11 +4,27 @@ use App\Ai\Agents\GuestReplyAgent;
 use App\Models\Booking;
 use App\Models\SystemLog;
 use App\Models\Transaction;
+use App\Models\WebhookSubscription;
 use App\Models\WhatsappMessage;
 use Illuminate\Support\Facades\Http;
 
 beforeEach(function () {
-    config(['lodgify.webhook_secret' => 'test-webhook-secret']);
+    foreach ([
+        'booking_new_any_status',
+        'booking_change',
+        'rate_change',
+        'availability_change',
+        'guest_message_received',
+    ] as $event) {
+        WebhookSubscription::create([
+            'source' => 'lodgify',
+            'event' => $event,
+            'subscription_id' => "test-sub-{$event}",
+            'secret' => "test-secret-{$event}",
+            'target_url' => "http://localhost/lodgify/webhook?event={$event}",
+        ]);
+    }
+
     config(['whatsapp.staff_phone_number' => '+212661234567']);
     Http::fake([
         'api.p.2chat.io/*' => Http::response(['message_uuid' => 'fake-uuid'], 200),
@@ -20,7 +36,7 @@ beforeEach(function () {
 test('creates new booking from lodgify webhook', function () {
     $payload = makeLodgifyBookingPayload(action: 'booking_new_any_status', lodgifyId: 99001);
 
-    $response = $this->postJson('/lodgify/webhook', $payload, lodgifyHeaders($payload));
+    $response = $this->postJson(lodgifyWebhookUrl($payload), $payload, lodgifyHeaders($payload));
 
     $response->assertOk();
 
@@ -38,7 +54,7 @@ test('creates new booking from lodgify webhook', function () {
 test('sends welcome message for new confirmed booking', function () {
     $payload = makeLodgifyBookingPayload(action: 'booking_new_any_status', lodgifyId: 99002);
 
-    $this->postJson('/lodgify/webhook', $payload, lodgifyHeaders($payload));
+    $this->postJson(lodgifyWebhookUrl($payload), $payload, lodgifyHeaders($payload));
 
     // Welcome outbound message stored
     $outbound = WhatsappMessage::where('direction', 'outbound')->where('agent_source', 'lodgify_sync')->first();
@@ -57,7 +73,7 @@ test('updates existing booking on booking_change', function () {
 
     $payload = makeLodgifyBookingPayload(action: 'booking_change', lodgifyId: 99003);
 
-    $this->postJson('/lodgify/webhook', $payload, lodgifyHeaders($payload));
+    $this->postJson(lodgifyWebhookUrl($payload), $payload, lodgifyHeaders($payload));
 
     $booking = Booking::where('lodgify_booking_id', '99003')->first();
     expect($booking->guest_name)->toBe('John Doe');
@@ -72,7 +88,7 @@ test('does not send welcome message on update', function () {
 
     $payload = makeLodgifyBookingPayload(action: 'booking_change', lodgifyId: 99004);
 
-    $this->postJson('/lodgify/webhook', $payload, lodgifyHeaders($payload));
+    $this->postJson(lodgifyWebhookUrl($payload), $payload, lodgifyHeaders($payload));
 
     expect(WhatsappMessage::where('agent_source', 'lodgify_sync')->count())->toBe(0);
 });
@@ -85,7 +101,7 @@ test('handles booking cancellation and schedules recovery job', function () {
 
     $payload = makeLodgifyBookingPayload(action: 'booking_change', lodgifyId: 99005, status: 'Cancelled');
 
-    $this->postJson('/lodgify/webhook', $payload, lodgifyHeaders($payload));
+    $this->postJson(lodgifyWebhookUrl($payload), $payload, lodgifyHeaders($payload));
 
     $booking = Booking::where('lodgify_booking_id', '99005')->first();
     expect($booking->booking_status)->toBe('cancelled');
@@ -102,7 +118,7 @@ test('does not overwrite checked_in status on booking_change', function () {
 
     $payload = makeLodgifyBookingPayload(action: 'booking_change', lodgifyId: 99007);
 
-    $this->postJson('/lodgify/webhook', $payload, lodgifyHeaders($payload));
+    $this->postJson(lodgifyWebhookUrl($payload), $payload, lodgifyHeaders($payload));
 
     $booking = Booking::where('lodgify_booking_id', '99007')->first();
     expect($booking->booking_status)->toBe('checked_in');
@@ -124,7 +140,7 @@ test('maps lodgify statuses correctly', function () {
             status: $lodgifyStatus,
         );
 
-        $this->postJson('/lodgify/webhook', $payload, lodgifyHeaders($payload));
+        $this->postJson(lodgifyWebhookUrl($payload), $payload, lodgifyHeaders($payload));
 
         $booking = Booking::where('lodgify_booking_id', (string) $payload['booking']['id'])->first();
         expect($booking->booking_status)->toBe($expected, "Lodgify status '{$lodgifyStatus}' should map to '{$expected}'");
@@ -132,9 +148,7 @@ test('maps lodgify statuses correctly', function () {
 });
 
 test('rejects webhook on signature mismatch', function () {
-    config(['lodgify.webhook_secret' => 'test-secret']);
-
-    $response = $this->postJson('/lodgify/webhook', [
+    $response = $this->postJson('/lodgify/webhook?event=rate_change', [
         'action' => 'rate_change',
         'property_id' => 1000,
     ], ['ms-signature' => 'sha256=INVALID']);
@@ -142,12 +156,21 @@ test('rejects webhook on signature mismatch', function () {
     $response->assertStatus(401);
 });
 
-test('rejects webhook when secret is not configured', function () {
-    config(['lodgify.webhook_secret' => null]);
-
+test('rejects webhook when ?event= query param is missing', function () {
     $response = $this->postJson('/lodgify/webhook', [
         'action' => 'rate_change',
         'property_id' => 1000,
+    ], ['ms-signature' => 'sha256=anything']);
+
+    $response->assertStatus(401);
+});
+
+test('rejects webhook when no subscription row exists for the event', function () {
+    WebhookSubscription::where('source', 'lodgify')->delete();
+
+    $payload = ['action' => 'rate_change', 'property_id' => 1000];
+    $response = $this->postJson('/lodgify/webhook?event=rate_change', $payload, [
+        'ms-signature' => 'sha256=anything',
     ]);
 
     $response->assertStatus(401);
@@ -156,7 +179,7 @@ test('rejects webhook when secret is not configured', function () {
 test('auto-logs booking revenue on new booking', function () {
     $payload = makeLodgifyBookingPayload(action: 'booking_new_any_status', lodgifyId: 99010);
 
-    $this->postJson('/lodgify/webhook', $payload, lodgifyHeaders($payload));
+    $this->postJson(lodgifyWebhookUrl($payload), $payload, lodgifyHeaders($payload));
 
     $booking = Booking::where('lodgify_booking_id', '99010')->first();
 
@@ -190,7 +213,7 @@ test('does not duplicate revenue on booking update', function () {
 
     $payload = makeLodgifyBookingPayload(action: 'booking_change', lodgifyId: 99011);
 
-    $this->postJson('/lodgify/webhook', $payload, lodgifyHeaders($payload));
+    $this->postJson(lodgifyWebhookUrl($payload), $payload, lodgifyHeaders($payload));
 
     // Still only one transaction
     expect(Transaction::where('booking_id', $booking->id)->count())->toBe(1);
@@ -207,7 +230,7 @@ test('sends cancellation alert to staff on booking cancellation', function () {
 
     $payload = makeLodgifyBookingPayload(action: 'booking_change', lodgifyId: 99012, status: 'Cancelled');
 
-    $this->postJson('/lodgify/webhook', $payload, lodgifyHeaders($payload));
+    $this->postJson(lodgifyWebhookUrl($payload), $payload, lodgifyHeaders($payload));
 
     // Cancellation alert sent to staff
     $alert = WhatsappMessage::where('agent_source', 'cancellation_alert')->first();
@@ -226,7 +249,7 @@ test('sets conversation_state to cancelled on cancellation', function () {
 
     $payload = makeLodgifyBookingPayload(action: 'booking_change', lodgifyId: 99013, status: 'Cancelled');
 
-    $this->postJson('/lodgify/webhook', $payload, lodgifyHeaders($payload));
+    $this->postJson(lodgifyWebhookUrl($payload), $payload, lodgifyHeaders($payload));
 
     $booking = Booking::where('lodgify_booking_id', '99013')->first();
     expect($booking->conversation_state)->toBe('cancelled');
@@ -238,7 +261,7 @@ test('logs rate_change and availability_change without error', function () {
         'property_id' => 1000,
         'room_type_ids' => [123],
     ];
-    $this->postJson('/lodgify/webhook', $ratePayload, lodgifyHeaders($ratePayload))->assertOk();
+    $this->postJson(lodgifyWebhookUrl($ratePayload), $ratePayload, lodgifyHeaders($ratePayload))->assertOk();
 
     $availPayload = [
         'action' => 'availability_change',
@@ -248,18 +271,32 @@ test('logs rate_change and availability_change without error', function () {
         'end' => '2026-07-05',
         'source' => 'Manual',
     ];
-    $this->postJson('/lodgify/webhook', $availPayload, lodgifyHeaders($availPayload))->assertOk();
+    $this->postJson(lodgifyWebhookUrl($availPayload), $availPayload, lodgifyHeaders($availPayload))->assertOk();
 });
 
 /**
- * Compute Lodgify webhook HMAC signature headers for a payload.
+ * Build the per-event Lodgify webhook URL the controller expects.
+ * Matches the URL scheme set by SetupWebhooksCommand.
+ */
+function lodgifyWebhookUrl(array $payload): string
+{
+    $action = $payload['action'] ?? 'unknown';
+    return '/lodgify/webhook?event=' . urlencode($action);
+}
+
+/**
+ * Compute Lodgify webhook HMAC signature headers for a payload, using the
+ * per-event secret seeded into webhook_subscriptions by beforeEach().
  */
 function lodgifyHeaders(array $payload): array
 {
     $body = json_encode($payload);
-    $secret = config('lodgify.webhook_secret');
+    $event = $payload['action'] ?? 'unknown';
+    $secret = WebhookSubscription::where('source', 'lodgify')
+        ->where('event', $event)
+        ->value('secret');
 
-    return ['ms-signature' => 'sha256=' . strtoupper(hash_hmac('sha256', $body, $secret))];
+    return ['ms-signature' => 'sha256=' . strtoupper(hash_hmac('sha256', $body, (string) $secret))];
 }
 
 /**
