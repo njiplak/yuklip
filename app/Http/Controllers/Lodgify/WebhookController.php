@@ -53,15 +53,30 @@ class WebhookController extends Controller
         $action = $request->input('action');
 
         return match ($action) {
-            'booking_new', 'booking_change' => $this->handleBookingSync($request, $twoChat),
-            'booking_cancelled' => $this->handleBookingCancellation($request, $twoChat),
-            'booking_deleted' => $this->handleBookingDeleted($request),
+            'booking_new_any_status' => $this->handleBookingSync($request, $twoChat),
+            'booking_change' => $this->routeBookingChange($request, $twoChat),
             'rate_change' => $this->handleRateChange($request),
             'availability_change' => $this->handleAvailabilityChange($request),
             'guest_message_received' => $this->handleGuestMessage($request),
             'booking_payment_received', 'booking_payment_refunded', 'booking_payment_deleted' => $this->handlePaymentEvent($request),
             default => $this->handleUnknown($request),
         };
+    }
+
+    /**
+     * `booking_change` is Lodgify's catch-all for booking updates, including
+     * cancellation/decline. Route by status so cancellations still trigger the
+     * recovery flow.
+     */
+    protected function routeBookingChange(Request $request, TwoChatService $twoChat): JsonResponse
+    {
+        $status = strtolower((string) $request->input('booking.status', ''));
+
+        if (in_array($status, ['cancelled', 'declined'], true)) {
+            return $this->handleBookingCancellation($request, $twoChat);
+        }
+
+        return $this->handleBookingSync($request, $twoChat);
     }
 
     protected function handleBookingSync(Request $request, TwoChatService $twoChat): JsonResponse
@@ -315,31 +330,6 @@ class WebhookController extends Controller
                     'payload' => ['delay_minutes' => 30],
                 ]);
             }
-        }
-
-        return response()->json(['status' => 'ok']);
-    }
-
-    protected function handleBookingDeleted(Request $request): JsonResponse
-    {
-        $lodgifyBooking = $request->input('booking', []);
-        $lodgifyId = (string) ($lodgifyBooking['id'] ?? '');
-
-        if (!$lodgifyId) {
-            return response()->json(['status' => 'skipped', 'reason' => 'no_booking_id']);
-        }
-
-        $booking = Booking::where('lodgify_booking_id', $lodgifyId)->first();
-
-        if ($booking) {
-            $booking->update(['booking_status' => 'cancelled']);
-
-            SystemLog::create([
-                'agent' => 'lodgify_sync',
-                'action' => 'booking_deleted',
-                'booking_id' => $booking->id,
-                'status' => 'success',
-            ]);
         }
 
         return response()->json(['status' => 'ok']);
@@ -600,19 +590,16 @@ class WebhookController extends Controller
             return false;
         }
 
-        $expected = 'sha256=' . strtoupper(hash_hmac('sha256', $request->getContent(), $secret));
+        $body = $request->getContent();
+        $expectedUpper = 'sha256=' . strtoupper(hash_hmac('sha256', $body, $secret));
+        $expectedLower = 'sha256=' . strtolower(hash_hmac('sha256', $body, $secret));
 
-        if (!hash_equals($expected, $signature)) {
+        if (!hash_equals($expectedUpper, $signature) && !hash_equals($expectedLower, $signature)) {
             Log::warning('Lodgify webhook signature mismatch', [
-                'expected' => $expected,
-                'received' => $signature,
-                'secret_prefix' => substr($secret, 0, 8) . '...',
+                'received_prefix' => substr($signature, 0, 16) . '...',
+                'secret_prefix' => substr($secret, 0, 4) . '...',
             ]);
-
-            // TODO: remove this fallback once the correct secret is configured.
-            // Allow requests that have a valid ms-signature header from Lodgify's IP range
-            // so bookings can sync while we resolve the secret mismatch.
-            return true;
+            return false;
         }
 
         return true;

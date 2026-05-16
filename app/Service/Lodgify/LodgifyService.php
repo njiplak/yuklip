@@ -19,54 +19,49 @@ class LodgifyService
     /**
      * Subscribe to a webhook event.
      *
-     * Available events:
-     * - booking_new
-     * - booking_change
-     * - booking_cancelled
-     * - booking_deleted
-     * - availability_change
+     * Valid Lodgify v1 events:
+     * - booking_new_any_status
+     * - booking_change         (covers status transitions, including cancellation)
      * - rate_change
+     * - availability_change
      * - guest_message_received
      * - booking_payment_received
      * - booking_payment_refunded
      * - booking_payment_deleted
      *
      * Returns: { "id": "string", "secret": "string" }
-     * IMPORTANT: The secret is only returned once at creation. Store it.
+     * The secret is only returned once at creation. Store it.
      */
     public function subscribeWebhook(string $event, string $targetUrl): array
     {
-        $response = $this->client()->post('/webhooks/v1/subscribe', [
-            'event' => $event,
-            'target_url' => $targetUrl,
-        ]);
+        $response = $this->client()
+            ->post('/webhooks/v1/subscribe', [
+                'event' => $event,
+                'target_url' => $targetUrl,
+            ])
+            ->throw();
 
         $data = $response->json();
 
         return is_array($data) ? $data : ['raw' => $data];
     }
 
-    /**
-     * Unsubscribe from a webhook by its ID.
-     */
     public function unsubscribeWebhook(string $webhookId): array
     {
-        $response = $this->client()->delete('/webhooks/v1/unsubscribe', [
-            'id' => $webhookId,
-        ]);
+        $response = $this->client()
+            ->delete('/webhooks/v1/unsubscribe', ['id' => $webhookId])
+            ->throw();
 
         $data = $response->json();
 
         return is_array($data) ? $data : ['raw' => $data];
     }
 
-    /**
-     * List all subscribed webhooks.
-     */
     public function listWebhooks(): array
     {
-        $response = $this->client()->get('/webhooks/v1/list');
-
-        return $response->json();
+        return $this->client()
+            ->get('/webhooks/v1/list')
+            ->throw()
+            ->json();
     }
 }

@@ -15,11 +15,16 @@ class SetupWebhooksCommand extends Command
     /**
      * Lodgify events that the system handles.
      */
+    /**
+     * Lodgify v1 webhook events we subscribe to.
+     *
+     * `booking_change` is what fires on cancellation/decline — there is no
+     * standalone `booking_cancelled` or `booking_deleted` event in Lodgify v1.
+     * The handler routes by `booking.status` for cancellations.
+     */
     protected array $lodgifyEvents = [
-        'booking_new',
+        'booking_new_any_status',
         'booking_change',
-        'booking_cancelled',
-        'booking_deleted',
         'rate_change',
         'availability_change',
         'guest_message_received',
@@ -97,9 +102,21 @@ class SetupWebhooksCommand extends Command
         return self::SUCCESS;
     }
 
+    /**
+     * Unsubscribe only our own webhooks (target URL under APP_URL).
+     * Lodgify's webhook list is account-scoped, so third-party integrations
+     * such as PriceLabs are returned here too — we must not delete them.
+     */
     protected function unsubscribeAll(LodgifyService $lodgify): void
     {
-        $this->info('Unsubscribing all existing Lodgify webhooks...');
+        $ownPrefix = rtrim((string) config('app.url'), '/');
+
+        if ($ownPrefix === '') {
+            $this->error('  Cannot run --fresh: APP_URL is not configured.');
+            return;
+        }
+
+        $this->info("Unsubscribing existing Lodgify webhooks for {$ownPrefix} ...");
 
         try {
             $webhooks = $lodgify->listWebhooks();
@@ -113,20 +130,33 @@ class SetupWebhooksCommand extends Command
             return;
         }
 
+        $unsubscribed = 0;
+
         foreach ($webhooks as $webhook) {
             $id = $webhook['id'] ?? null;
             $event = $webhook['event'] ?? 'unknown';
+            $url = (string) ($webhook['url'] ?? '');
 
             if (!$id) {
+                continue;
+            }
+
+            if (!str_starts_with($url, $ownPrefix)) {
+                $this->line("  Skipping third-party: {$event} => {$url}");
                 continue;
             }
 
             try {
                 $lodgify->unsubscribeWebhook($id);
                 $this->line("  Unsubscribed: {$event} ({$id}) [OK]");
+                $unsubscribed++;
             } catch (\Throwable $e) {
                 $this->error("  Unsubscribe {$event} ({$id}) => FAILED: {$e->getMessage()}");
             }
+        }
+
+        if ($unsubscribed === 0) {
+            $this->line('  Nothing to unsubscribe.');
         }
 
         $this->newLine();

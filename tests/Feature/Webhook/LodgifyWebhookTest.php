@@ -18,7 +18,7 @@ beforeEach(function () {
 });
 
 test('creates new booking from lodgify webhook', function () {
-    $payload = makeLodgifyBookingPayload(action: 'booking_new', lodgifyId: 99001);
+    $payload = makeLodgifyBookingPayload(action: 'booking_new_any_status', lodgifyId: 99001);
 
     $response = $this->postJson('/lodgify/webhook', $payload, lodgifyHeaders($payload));
 
@@ -36,7 +36,7 @@ test('creates new booking from lodgify webhook', function () {
 });
 
 test('sends welcome message for new confirmed booking', function () {
-    $payload = makeLodgifyBookingPayload(action: 'booking_new', lodgifyId: 99002);
+    $payload = makeLodgifyBookingPayload(action: 'booking_new_any_status', lodgifyId: 99002);
 
     $this->postJson('/lodgify/webhook', $payload, lodgifyHeaders($payload));
 
@@ -83,7 +83,7 @@ test('handles booking cancellation and schedules recovery job', function () {
         'booking_status' => 'confirmed',
     ]);
 
-    $payload = makeLodgifyBookingPayload(action: 'booking_cancelled', lodgifyId: 99005);
+    $payload = makeLodgifyBookingPayload(action: 'booking_change', lodgifyId: 99005, status: 'Cancelled');
 
     $this->postJson('/lodgify/webhook', $payload, lodgifyHeaders($payload));
 
@@ -92,24 +92,6 @@ test('handles booking cancellation and schedules recovery job', function () {
 
     // Recovery scheduled
     expect(SystemLog::where('agent', 'cancellation_recovery')->where('action', 'recovery_scheduled')->count())->toBe(1);
-});
-
-test('handles booking_deleted by setting status to cancelled', function () {
-    Booking::factory()->create([
-        'lodgify_booking_id' => '99006',
-        'booking_status' => 'confirmed',
-    ]);
-
-    $payload = [
-        'action' => 'booking_deleted',
-        'booking' => ['id' => 99006],
-        'is_deleted' => true,
-    ];
-
-    $this->postJson('/lodgify/webhook', $payload, lodgifyHeaders($payload));
-
-    $booking = Booking::where('lodgify_booking_id', '99006')->first();
-    expect($booking->booking_status)->toBe('cancelled');
 });
 
 test('does not overwrite checked_in status on booking_change', function () {
@@ -137,7 +119,7 @@ test('maps lodgify statuses correctly', function () {
         ['Cancelled', 'cancelled'],
     ] as [$lodgifyStatus, $expected]) {
         $payload = makeLodgifyBookingPayload(
-            action: 'booking_new',
+            action: 'booking_new_any_status',
             lodgifyId: random_int(100000, 999999),
             status: $lodgifyStatus,
         );
@@ -149,7 +131,7 @@ test('maps lodgify statuses correctly', function () {
     }
 });
 
-test('logs signature mismatch but allows request through (temporary bypass)', function () {
+test('rejects webhook on signature mismatch', function () {
     config(['lodgify.webhook_secret' => 'test-secret']);
 
     $response = $this->postJson('/lodgify/webhook', [
@@ -157,8 +139,7 @@ test('logs signature mismatch but allows request through (temporary bypass)', fu
         'property_id' => 1000,
     ], ['ms-signature' => 'sha256=INVALID']);
 
-    // Temporary bypass allows the request through
-    $response->assertOk();
+    $response->assertStatus(401);
 });
 
 test('rejects webhook when secret is not configured', function () {
@@ -173,7 +154,7 @@ test('rejects webhook when secret is not configured', function () {
 });
 
 test('auto-logs booking revenue on new booking', function () {
-    $payload = makeLodgifyBookingPayload(action: 'booking_new', lodgifyId: 99010);
+    $payload = makeLodgifyBookingPayload(action: 'booking_new_any_status', lodgifyId: 99010);
 
     $this->postJson('/lodgify/webhook', $payload, lodgifyHeaders($payload));
 
@@ -224,7 +205,7 @@ test('sends cancellation alert to staff on booking cancellation', function () {
         'suite_name' => 'Suite Rose',
     ]);
 
-    $payload = makeLodgifyBookingPayload(action: 'booking_cancelled', lodgifyId: 99012);
+    $payload = makeLodgifyBookingPayload(action: 'booking_change', lodgifyId: 99012, status: 'Cancelled');
 
     $this->postJson('/lodgify/webhook', $payload, lodgifyHeaders($payload));
 
@@ -243,7 +224,7 @@ test('sets conversation_state to cancelled on cancellation', function () {
         'conversation_state' => 'preferences_partial',
     ]);
 
-    $payload = makeLodgifyBookingPayload(action: 'booking_cancelled', lodgifyId: 99013);
+    $payload = makeLodgifyBookingPayload(action: 'booking_change', lodgifyId: 99013, status: 'Cancelled');
 
     $this->postJson('/lodgify/webhook', $payload, lodgifyHeaders($payload));
 
