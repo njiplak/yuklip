@@ -15,6 +15,7 @@ class WebhookLog extends Model
         'url',
         'headers',
         'payload',
+        'raw_body',
         'status_code',
         'response_body',
         'ip_address',

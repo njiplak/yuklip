@@ -29,6 +29,7 @@ class WebhookController extends Controller
             'url' => $request->fullUrl(),
             'headers' => collect($request->headers->all())->except(['cookie'])->toArray(),
             'payload' => $request->all(),
+            'raw_body' => $request->getContent(),
             'ip_address' => $request->ip(),
         ]);
 
@@ -596,8 +597,13 @@ class WebhookController extends Controller
 
         if (!hash_equals($expectedUpper, $signature) && !hash_equals($expectedLower, $signature)) {
             Log::warning('Lodgify webhook signature mismatch', [
-                'received_prefix' => substr($signature, 0, 16) . '...',
-                'secret_prefix' => substr($secret, 0, 4) . '...',
+                'received'       => $signature,
+                'computed_upper' => $expectedUpper,
+                'computed_lower' => $expectedLower,
+                'body_length'    => strlen($body),
+                'body_sha256'    => hash('sha256', $body),
+                'secret_length'  => strlen($secret),
+                'secret_prefix'  => substr($secret, 0, 4) . '...',
             ]);
             return false;
         }
