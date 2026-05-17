@@ -7,8 +7,10 @@ use App\Http\Controllers\Controller;
 use App\Jobs\CancellationRecoveryJob;
 use App\Models\Booking;
 use App\Models\Customer;
+use App\Models\Offer;
 use App\Models\SystemLog;
 use App\Models\Transaction;
+use App\Models\UpsellLog;
 use App\Models\WebhookLog;
 use App\Models\WebhookSubscription;
 use App\Models\WhatsappMessage;
@@ -462,6 +464,16 @@ class WebhookController extends Controller
             ? "Generate a warm welcome-back message for this returning guest. They have stayed {$customer->total_stays} time(s) before. Acknowledge their return — make them feel recognized and valued. Introduce yourself as the concierge and let them know you are available on WhatsApp. Mention that you remember their preferences from last time and confirm if anything has changed. Ask about their estimated arrival time. Keep it natural and personal."
             : 'Generate a warm welcome message for this new guest. Introduce yourself as the concierge and let them know you are available on WhatsApp for anything they need during their stay. At the end, ask about their estimated arrival time to help prepare for their welcome. Keep it natural — just ask about arrival time for now, you will collect other preferences in follow-up messages.';
 
+        $offer = $this->resolveBookingConfirmedOffer($booking);
+
+        if ($offer) {
+            $priceLine = $offer->price ? " (priced at {$offer->price} {$offer->currency})" : '';
+            $prompt .= "\n\nPre-arrival offer to weave into this message naturally — do not bolt it on at the end, fold it into the body of the welcome as a soft suggestion the guest can take or leave:\n"
+                . "- Title: {$offer->title}{$priceLine}\n"
+                . "- Description: {$offer->description}\n"
+                . "Mention it ONCE, in one short sentence. The arrival-time question must still come last. If the guest expresses interest in their reply, staff will handle it manually.";
+        }
+
         $response = (new GuestReplyAgent($booking))->prompt($prompt);
 
         $message = (string) $response;
@@ -478,12 +490,40 @@ class WebhookController extends Controller
             'sent_at' => now(),
         ]);
 
+        if ($offer) {
+            // Track that the booking_confirmed offer was suggested in the welcome.
+            // We deliberately do NOT set current_upsell_offer_id / upsell_offer_sent_at on the booking —
+            // doing so would route the guest's first reply to the upsell handler and bypass preference collection.
+            UpsellLog::create([
+                'booking_id' => $booking->id,
+                'offer_id' => $offer->id,
+                'message_sent' => $message,
+                'sent_at' => now(),
+                'outcome' => 'pending',
+            ]);
+        }
+
         SystemLog::create([
             'agent' => 'lodgify_sync',
             'action' => 'welcome_sent',
             'booking_id' => $booking->id,
             'status' => 'success',
+            'payload' => $offer ? ['booking_confirmed_offer' => $offer->offer_code] : null,
         ]);
+    }
+
+    protected function resolveBookingConfirmedOffer(Booking $booking): ?Offer
+    {
+        $sentCounts = UpsellLog::where('booking_id', $booking->id)
+            ->selectRaw('offer_id, count(*) as send_count')
+            ->groupBy('offer_id')
+            ->pluck('send_count', 'offer_id');
+
+        return Offer::active()
+            ->where('timing_rule', 'booking_confirmed')
+            ->orderBy('id')
+            ->get()
+            ->first(fn (Offer $o) => $sentCounts->get($o->id, 0) < $o->max_sends_per_stay);
     }
 
     protected function linkCustomer(Booking $booking, array $guest): Customer

@@ -19,7 +19,7 @@ class OfferRequest extends FormRequest
             'title' => ['required', 'string', 'max:255'],
             'description' => ['required', 'string'],
             'category' => ['required', 'string', Rule::in(['wellness', 'dining', 'experience', 'transport'])],
-            'timing_rule' => ['required', 'string', Rule::in(['arrival_day', 'day_2', 'day_3', 'day_4', 'day_1_before_checkout'])],
+            'timing_rule' => ['required', 'string', Rule::in(['booking_confirmed', 'arrival_day', 'day_2', 'day_3', 'day_4', 'day_1_before_checkout'])],
             'price' => ['nullable', 'numeric', 'min:0'],
             'currency' => ['required', 'string', 'size:3'],
             'is_active' => ['required', 'boolean'],

@@ -2,8 +2,11 @@
 
 use App\Ai\Agents\GuestReplyAgent;
 use App\Models\Booking;
+use App\Models\Customer;
+use App\Models\Offer;
 use App\Models\SystemLog;
 use App\Models\Transaction;
+use App\Models\UpsellLog;
 use App\Models\WebhookSubscription;
 use App\Models\WhatsappMessage;
 use Illuminate\Support\Facades\Http;
@@ -87,6 +90,122 @@ test('sends welcome message for new confirmed booking', function () {
 
     // Welcome log
     expect(SystemLog::where('action', 'welcome_sent')->count())->toBe(1);
+});
+
+test('weaves booking_confirmed offer into welcome and records UpsellLog', function () {
+    $offer = Offer::create([
+        'offer_code' => 'AIRPORT_TRANSFER_PRE',
+        'title' => 'Airport Transfer by Private Car',
+        'description' => 'Private car transfer from Marrakech airport on arrival day.',
+        'category' => 'transport',
+        'timing_rule' => 'booking_confirmed',
+        'price' => 250.00,
+        'currency' => 'MAD',
+        'is_active' => true,
+        'max_sends_per_stay' => 1,
+    ]);
+
+    $payload = makeLodgifyBookingPayload(action: 'booking_new_any_status', lodgifyId: 99010);
+
+    $this->postJson(lodgifyWebhookUrl($payload), $payload, lodgifyHeaders($payload));
+
+    $booking = Booking::where('lodgify_booking_id', '99010')->first();
+    expect($booking)->not->toBeNull();
+
+    // UpsellLog row recorded for the woven offer
+    $log = UpsellLog::where('booking_id', $booking->id)->where('offer_id', $offer->id)->first();
+    expect($log)->not->toBeNull();
+    expect($log->outcome)->toBe('pending');
+    expect($log->sent_at)->not->toBeNull();
+    expect($log->message_sent)->not->toBeNull();
+
+    // Booking-level upsell routing fields must NOT be set — would hijack preference collection.
+    expect($booking->current_upsell_offer_id)->toBeNull();
+    expect($booking->upsell_offer_sent_at)->toBeNull();
+
+    // SystemLog payload references the offer code
+    $sys = SystemLog::where('action', 'welcome_sent')->first();
+    expect($sys)->not->toBeNull();
+    expect($sys->payload['booking_confirmed_offer'])->toBe('AIRPORT_TRANSFER_PRE');
+});
+
+test('skips offer weave when no booking_confirmed offer exists', function () {
+    // Seed only mid-stay offers — none should match
+    Offer::create([
+        'offer_code' => 'HAMMAM_D2',
+        'title' => 'Hammam',
+        'description' => 'Mid-stay only.',
+        'category' => 'wellness',
+        'timing_rule' => 'day_2',
+        'price' => 800.00,
+        'currency' => 'MAD',
+        'is_active' => true,
+        'max_sends_per_stay' => 1,
+    ]);
+
+    $payload = makeLodgifyBookingPayload(action: 'booking_new_any_status', lodgifyId: 99011);
+
+    $this->postJson(lodgifyWebhookUrl($payload), $payload, lodgifyHeaders($payload));
+
+    $booking = Booking::where('lodgify_booking_id', '99011')->first();
+
+    expect(UpsellLog::where('booking_id', $booking->id)->count())->toBe(0);
+
+    $sys = SystemLog::where('action', 'welcome_sent')->first();
+    expect($sys->payload)->toBeNull();
+});
+
+test('skips offer weave when booking_confirmed offer is inactive', function () {
+    Offer::create([
+        'offer_code' => 'AIRPORT_TRANSFER_PRE',
+        'title' => 'Airport Transfer',
+        'description' => 'Pre-arrival transfer.',
+        'category' => 'transport',
+        'timing_rule' => 'booking_confirmed',
+        'price' => 250.00,
+        'currency' => 'MAD',
+        'is_active' => false,
+        'max_sends_per_stay' => 1,
+    ]);
+
+    $payload = makeLodgifyBookingPayload(action: 'booking_new_any_status', lodgifyId: 99012);
+
+    $this->postJson(lodgifyWebhookUrl($payload), $payload, lodgifyHeaders($payload));
+
+    $booking = Booking::where('lodgify_booking_id', '99012')->first();
+
+    expect(UpsellLog::where('booking_id', $booking->id)->count())->toBe(0);
+});
+
+test('weaves booking_confirmed offer for returning guests too', function () {
+    // Pre-seed a customer matching the lodgify guest phone; linkCustomer will increment total_stays to 2.
+    Customer::create([
+        'phone' => '+33612345678',
+        'name' => 'John Doe',
+        'total_stays' => 1,
+        'first_stay_at' => now()->subYear(),
+    ]);
+
+    $offer = Offer::create([
+        'offer_code' => 'WELCOME_BACK_DRINK',
+        'title' => 'Welcome-Back Drink',
+        'description' => 'A signature drink waiting in the suite on arrival.',
+        'category' => 'dining',
+        'timing_rule' => 'booking_confirmed',
+        'price' => 100.00,
+        'currency' => 'MAD',
+        'is_active' => true,
+        'max_sends_per_stay' => 1,
+    ]);
+
+    $payload = makeLodgifyBookingPayload(action: 'booking_new_any_status', lodgifyId: 99013);
+
+    $this->postJson(lodgifyWebhookUrl($payload), $payload, lodgifyHeaders($payload));
+
+    $booking = Booking::where('lodgify_booking_id', '99013')->first();
+
+    expect($booking->customer->isReturning())->toBeTrue();
+    expect(UpsellLog::where('booking_id', $booking->id)->where('offer_id', $offer->id)->count())->toBe(1);
 });
 
 test('updates existing booking on booking_change', function () {

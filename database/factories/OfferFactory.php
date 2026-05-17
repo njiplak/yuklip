@@ -19,7 +19,7 @@ class OfferFactory extends Factory
             'title' => fake()->sentence(4),
             'description' => fake()->paragraph(),
             'category' => fake()->randomElement(['wellness', 'dining', 'experience', 'transport']),
-            'timing_rule' => fake()->randomElement(['arrival_day', 'day_2', 'day_3', 'day_4', 'day_1_before_checkout']),
+            'timing_rule' => fake()->randomElement(['booking_confirmed', 'arrival_day', 'day_2', 'day_3', 'day_4', 'day_1_before_checkout']),
             'price' => fake()->numberBetween(150, 1500),
             'currency' => 'MAD',
             'is_active' => true,
