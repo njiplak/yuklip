@@ -5,9 +5,9 @@ namespace App\Http\Controllers\WhatsApp;
 use App\Ai\Agents\CustomerProfileAgent;
 use App\Ai\Agents\ExpenseParserAgent;
 use App\Ai\Agents\GuestReplyAgent;
+use App\Ai\Agents\PreferenceBriefingAgent;
 use App\Ai\Agents\PreferenceExtractorAgent;
 use App\Ai\Agents\ServiceRequestDetectorAgent;
-use App\Ai\Agents\StaffBriefingAgent;
 use App\Ai\Agents\UpsellReplyAgent;
 use App\Http\Controllers\Controller;
 use App\Models\Booking;
@@ -218,8 +218,8 @@ class WebhookController extends Controller
                 'duration_ms' => (int) ((microtime(true) - $start) * 1000),
             ]);
 
-            // Detect service requests and notify staff if action is needed
-            $this->detectAndNotifyServiceRequest($booking, $text, $reply, $twoChat);
+            // Classify guest intent and notify the manager via the appropriate channels
+            $this->detectAndNotifyGuestIntent($booking, $text, $reply, $twoChat);
 
             // Send staff briefing and update customer profile once when preferences first complete
             if ($booking->conversation_state === 'preferences_complete' && !$booking->preferences_briefing_sent) {
@@ -466,21 +466,8 @@ class WebhookController extends Controller
         }
 
         try {
-            $arrivals = [[
-                'guest_name' => $booking->guest_name,
-                'suite_name' => $booking->suite_name,
-                'num_guests' => $booking->num_guests,
-                'guest_nationality' => $booking->guest_nationality,
-                'special_requests' => implode(' | ', array_filter([
-                    "Arrival: {$booking->pref_arrival_time}",
-                    "Bed: {$booking->pref_bed_type}",
-                    "Transfer: {$booking->pref_airport_transfer}",
-                    $booking->pref_special_requests !== 'none' ? $booking->pref_special_requests : null,
-                ])),
-            ]];
-
-            $response = (new StaffBriefingAgent($arrivals, []))->prompt(
-                'Generate a guest preparation briefing in both French and Arabic. All preferences have been collected from this guest via WhatsApp. Include all preference details so staff can prepare the suite and any transfers.'
+            $response = (new PreferenceBriefingAgent($booking))->prompt(
+                'Produce the bilingual bullet-style preferences conclusion for this guest. Render every preference field, even when not provided. Zero context loss.'
             );
 
             $briefing = (string) $response;
@@ -510,7 +497,7 @@ class WebhookController extends Controller
         }
     }
 
-    protected function detectAndNotifyServiceRequest(
+    protected function detectAndNotifyGuestIntent(
         Booking $booking,
         string $guestMessage,
         string $botReply,
@@ -520,61 +507,72 @@ class WebhookController extends Controller
             $result = (new ServiceRequestDetectorAgent($booking))->prompt($guestMessage);
             $detection = $result->toArray();
 
-            if (empty($detection['requires_staff_action'])) {
+            $intent = $detection['intent'] ?? 'none';
+            $summary = $detection['summary'] ?? null;
+
+            if ($intent === 'none') {
                 return;
             }
 
-            PushNotificationService::serviceRequest(
-                $booking->guest_name,
-                $booking->suite_name,
-                $detection['request_summary'] ?? 'Service request',
-            );
+            $pushSummary = $summary ?? $guestMessage;
 
-            $staffNumber = config('whatsapp.staff_phone_number');
+            match ($intent) {
+                'urgent' => PushNotificationService::urgentRequest($booking->guest_name, $booking->suite_name, $pushSummary),
+                'request' => PushNotificationService::serviceRequest($booking->guest_name, $booking->suite_name, $pushSummary),
+                'info' => PushNotificationService::guestQuestion($booking->guest_name, $booking->suite_name, $pushSummary),
+            };
 
-            if (!$staffNumber) {
-                return;
+            // info-tier is push-only — the manager sees it in-app, no WhatsApp blast.
+            $sendsWhatsapp = in_array($intent, ['urgent', 'request'], true);
+            $staffNumber = $sendsWhatsapp ? config('whatsapp.staff_phone_number') : null;
+            $whatsappMessageUuid = null;
+
+            if ($staffNumber) {
+                $label = match ($intent) {
+                    'urgent' => 'URGENT REQUEST',
+                    'request' => 'SERVICE REQUEST',
+                };
+
+                $alert = implode("\n", [
+                    $label,
+                    '',
+                    "Guest: {$booking->guest_name}",
+                    "Suite: {$booking->suite_name}",
+                    "Request: {$summary}",
+                    '',
+                    "Guest said: \"{$guestMessage}\"",
+                    "Bot replied: \"{$botReply}\"",
+                    '',
+                    'Please follow up with the guest.',
+                ]);
+
+                $sendResult = $twoChat->sendMessage($staffNumber, $alert);
+                $whatsappMessageUuid = $sendResult['message_uuid'] ?? null;
+
+                WhatsappMessage::create([
+                    'direction' => 'outbound',
+                    'phone_number' => $staffNumber,
+                    'message_body' => $alert,
+                    'agent_source' => 'service_request',
+                    'booking_id' => $booking->id,
+                    'twochat_message_id' => $whatsappMessageUuid,
+                    'sent_at' => now(),
+                ]);
             }
-
-            $urgencyLabel = ($detection['urgency'] ?? 'normal') === 'urgent' ? 'URGENT ' : '';
-
-            $alert = implode("\n", [
-                "{$urgencyLabel}SERVICE REQUEST",
-                '',
-                "Guest: {$booking->guest_name}",
-                "Suite: {$booking->suite_name}",
-                "Request: {$detection['request_summary']}",
-                '',
-                "Guest said: \"{$guestMessage}\"",
-                "Bot replied: \"{$botReply}\"",
-                '',
-                'Please follow up with the guest.',
-            ]);
-
-            $result = $twoChat->sendMessage($staffNumber, $alert);
-
-            WhatsappMessage::create([
-                'direction' => 'outbound',
-                'phone_number' => $staffNumber,
-                'message_body' => $alert,
-                'agent_source' => 'service_request',
-                'booking_id' => $booking->id,
-                'twochat_message_id' => $result['message_uuid'] ?? null,
-                'sent_at' => now(),
-            ]);
 
             SystemLog::create([
                 'agent' => 'service_request',
-                'action' => 'staff_notified',
+                'action' => $staffNumber ? 'staff_notified' : 'manager_notified',
                 'booking_id' => $booking->id,
                 'status' => 'success',
                 'payload' => [
-                    'summary' => $detection['request_summary'],
-                    'urgency' => $detection['urgency'] ?? 'normal',
+                    'intent' => $intent,
+                    'summary' => $summary,
+                    'whatsapp_sent' => (bool) $staffNumber,
                 ],
             ]);
         } catch (\Throwable $e) {
-            Log::warning('Service request detection failed', [
+            Log::warning('Guest intent detection failed', [
                 'booking_id' => $booking->id,
                 'error' => $e->getMessage(),
             ]);

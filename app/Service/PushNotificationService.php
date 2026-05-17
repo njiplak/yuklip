@@ -81,6 +81,26 @@ class PushNotificationService
         );
     }
 
+    public static function urgentRequest(string $guestName, string $suite, string $request): void
+    {
+        static::broadcast(
+            "URGENT — {$guestName}",
+            "{$guestName} ({$suite}): {$request}",
+            '/backoffice/concierge/booking',
+            'urgent-request',
+        );
+    }
+
+    public static function guestQuestion(string $guestName, string $suite, string $question): void
+    {
+        static::broadcast(
+            "Guest Question",
+            "{$guestName} ({$suite}): {$question}",
+            '/backoffice/concierge/booking',
+            'guest-question',
+        );
+    }
+
     public static function customRequest(string $guestName, string $suite, string $request): void
     {
         static::broadcast(

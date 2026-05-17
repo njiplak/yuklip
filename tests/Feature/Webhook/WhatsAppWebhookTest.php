@@ -393,18 +393,17 @@ test('GuestReplyAgent shows active collection instructions when preferences are 
     expect($agent->nextPreferenceToAsk())->toBe('airport_transfer');
 });
 
-// ─── Fix B: Service request detection and staff notification ───
+// ─── Fix B: Guest intent detection and manager notification ───
 
-test('notifies staff when service request is detected', function () {
+test('notifies staff via WhatsApp when request intent is detected', function () {
     config(['whatsapp.staff_phone_number' => '+212661234567']);
 
     ServiceRequestDetectorAgent::fake([[
-        'requires_staff_action' => true,
-        'request_summary' => 'Guest wants fresh melon juice',
-        'urgency' => 'normal',
+        'intent' => 'request',
+        'summary' => 'Guest wants fresh melon juice',
     ]]);
 
-    $booking = Booking::factory()->create([
+    Booking::factory()->create([
         'guest_phone' => '+33612345678',
         'booking_status' => 'checked_in',
         'conversation_state' => 'preferences_complete',
@@ -417,7 +416,6 @@ test('notifies staff when service request is detected', function () {
         'message' => ['text' => 'I want melon juice'],
     ], whatsappHeaders());
 
-    // Staff notification sent
     $staffMessage = WhatsappMessage::where('agent_source', 'service_request')->first();
     expect($staffMessage)->not->toBeNull();
     expect($staffMessage->phone_number)->toBe('+212661234567');
@@ -425,20 +423,20 @@ test('notifies staff when service request is detected', function () {
     expect($staffMessage->message_body)->toContain('Guest wants fresh melon juice');
     expect($staffMessage->message_body)->toContain('I want melon juice');
 
-    // System log created
     $log = SystemLog::where('agent', 'service_request')->first();
     expect($log)->not->toBeNull();
     expect($log->action)->toBe('staff_notified');
+    expect($log->payload['intent'])->toBe('request');
     expect($log->payload['summary'])->toBe('Guest wants fresh melon juice');
+    expect($log->payload['whatsapp_sent'])->toBeTrue();
 });
 
-test('does not notify staff when no service request detected', function () {
+test('info intent fires push notification only — no WhatsApp staff alert', function () {
     config(['whatsapp.staff_phone_number' => '+212661234567']);
 
     ServiceRequestDetectorAgent::fake([[
-        'requires_staff_action' => false,
-        'request_summary' => null,
-        'urgency' => 'normal',
+        'intent' => 'info',
+        'summary' => 'Guest asks for the wifi password',
     ]]);
 
     Booking::factory()->create([
@@ -454,17 +452,49 @@ test('does not notify staff when no service request detected', function () {
         'message' => ['text' => 'What is the wifi password?'],
     ], whatsappHeaders());
 
+    // No WhatsApp alert to staff for info-tier
+    expect(WhatsappMessage::where('agent_source', 'service_request')->count())->toBe(0);
+
+    // But the manager is still informed via SystemLog (and push, which we don't assert here)
+    $log = SystemLog::where('agent', 'service_request')->first();
+    expect($log)->not->toBeNull();
+    expect($log->action)->toBe('manager_notified');
+    expect($log->payload['intent'])->toBe('info');
+    expect($log->payload['summary'])->toBe('Guest asks for the wifi password');
+    expect($log->payload['whatsapp_sent'])->toBeFalse();
+});
+
+test('none intent produces no manager notification at all', function () {
+    config(['whatsapp.staff_phone_number' => '+212661234567']);
+
+    ServiceRequestDetectorAgent::fake([[
+        'intent' => 'none',
+        'summary' => null,
+    ]]);
+
+    Booking::factory()->create([
+        'guest_phone' => '+33612345678',
+        'booking_status' => 'checked_in',
+        'conversation_state' => 'preferences_complete',
+    ]);
+
+    $this->postJson('/whatsapp/webhook', [
+        'remote_phone_number' => '+33612345678',
+        'sent_by' => 'user',
+        'uuid' => 'MSG-THANKS-1',
+        'message' => ['text' => 'thanks!'],
+    ], whatsappHeaders());
+
     expect(WhatsappMessage::where('agent_source', 'service_request')->count())->toBe(0);
     expect(SystemLog::where('agent', 'service_request')->count())->toBe(0);
 });
 
-test('urgent service request includes URGENT label in staff notification', function () {
+test('urgent intent includes URGENT REQUEST label in staff notification', function () {
     config(['whatsapp.staff_phone_number' => '+212661234567']);
 
     ServiceRequestDetectorAgent::fake([[
-        'requires_staff_action' => true,
-        'request_summary' => 'AC not working in guest room',
-        'urgency' => 'urgent',
+        'intent' => 'urgent',
+        'summary' => 'AC not working in guest room',
     ]]);
 
     Booking::factory()->create([
@@ -481,7 +511,11 @@ test('urgent service request includes URGENT label in staff notification', funct
     ], whatsappHeaders());
 
     $staffMessage = WhatsappMessage::where('agent_source', 'service_request')->first();
-    expect($staffMessage->message_body)->toContain('URGENT SERVICE REQUEST');
+    expect($staffMessage)->not->toBeNull();
+    expect($staffMessage->message_body)->toContain('URGENT REQUEST');
+
+    $log = SystemLog::where('agent', 'service_request')->first();
+    expect($log->payload['intent'])->toBe('urgent');
 });
 
 // ─── Fix C: Menu items in AI context ───
