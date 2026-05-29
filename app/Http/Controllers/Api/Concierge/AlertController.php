@@ -51,7 +51,11 @@ class AlertController extends Controller
                 'created_at' => $log->created_at->toIso8601String(),
             ]);
 
-        $alerts = $cancellations->merge($escalations)
+        // Cast to a base collection before merging: an Eloquent\Collection
+        // retains its type when the mapped result is empty, and its merge()
+        // calls getKey() on each item — which fatals on these plain arrays.
+        $alerts = $cancellations->toBase()
+            ->merge($escalations->toBase())
             ->sortByDesc('created_at')
             ->values();
 
